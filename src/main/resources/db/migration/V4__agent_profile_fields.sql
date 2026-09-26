@@ -1,0 +1,4 @@
+ALTER TABLE agents
+    ADD COLUMN telephone VARCHAR(40) NULL,
+    ADD COLUMN photo_mime VARCHAR(80) NULL,
+    ADD COLUMN photo_profil LONGBLOB NULL;

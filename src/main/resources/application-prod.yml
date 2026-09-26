@@ -1,0 +1,18 @@
+ma:
+  flyway:
+    repair-on-migrate: false
+  api-docs:
+    enabled: false
+  auth:
+    demo-totp: false
+  errors:
+    expose-details: false
+  security:
+    require-https: true
+    cors:
+      allowed-origins: ${MA_CORS_ORIGINS}
+
+server:
+  error:
+    include-stacktrace: never
+    include-message: never

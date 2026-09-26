@@ -1,0 +1,26 @@
+spring:
+  datasource:
+    username: test
+    password: test
+  kafka:
+    listener:
+      auto-startup: false
+ma:
+  kafka:
+    enabled: false
+  flyway:
+    repair-on-migrate: true
+  api-docs:
+    enabled: false
+  crypto:
+    aes-key: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+  auth:
+    demo-totp: true
+    demo-totp-code: "000000"
+  mail:
+    welcome-on-startup: false
+  errors:
+    expose-details: true
+  security:
+    cors:
+      allowed-origins: http://localhost

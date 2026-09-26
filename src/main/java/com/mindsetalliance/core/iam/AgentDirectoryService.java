@@ -1,0 +1,362 @@
+package com.mindsetalliance.core.iam;
+
+import com.mindsetalliance.core.audit.AuditService;
+import com.mindsetalliance.core.auth.AuthService;
+import com.mindsetalliance.core.auth.RefreshTokenRepository;
+import com.mindsetalliance.core.common.BusinessException;
+import com.mindsetalliance.core.common.security.JwtRoles;
+import jakarta.persistence.criteria.Join;
+import jakarta.persistence.criteria.JoinType;
+import jakarta.persistence.criteria.Predicate;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.security.SecureRandom;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+@Service
+public class AgentDirectoryService {
+
+    private static final String PASSWORD_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    private final AgentRepository agentRepository;
+    private final RoleRepository roleRepository;
+    private final ProjectRepository projectRepository;
+    private final DepartementRepository departementRepository;
+    private final AgentRoleRepository agentRoleRepository;
+    private final RefreshTokenRepository refreshTokenRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final AuditService auditService;
+    private final AuthService authService;
+    private final PermissionRepository permissionRepository;
+    private final AgentPermissionOverrideRepository overrideRepository;
+    private final EffectivePermissionService effectivePermissionService;
+    private final SecureRandom random = new SecureRandom();
+
+    public AgentDirectoryService(AgentRepository agentRepository, RoleRepository roleRepository,
+                                 ProjectRepository projectRepository, DepartementRepository departementRepository,
+                                 AgentRoleRepository agentRoleRepository, RefreshTokenRepository refreshTokenRepository,
+                                 PasswordEncoder passwordEncoder, AuditService auditService, AuthService authService,
+                                 PermissionRepository permissionRepository,
+                                 AgentPermissionOverrideRepository overrideRepository,
+                                 EffectivePermissionService effectivePermissionService) {
+        this.agentRepository = agentRepository;
+        this.roleRepository = roleRepository;
+        this.projectRepository = projectRepository;
+        this.departementRepository = departementRepository;
+        this.agentRoleRepository = agentRoleRepository;
+        this.refreshTokenRepository = refreshTokenRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.auditService = auditService;
+        this.authService = authService;
+        this.permissionRepository = permissionRepository;
+        this.overrideRepository = overrideRepository;
+        this.effectivePermissionService = effectivePermissionService;
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Map<String, Object>> list(String q, Long departementId, String statut, Pageable pageable) {
+        Specification<Agent> spec = (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            if (q != null && !q.isBlank()) {
+                String like = "%" + q.trim().toLowerCase() + "%";
+                predicates.add(cb.or(
+                        cb.like(cb.lower(root.get("nom")), like),
+                        cb.like(cb.lower(root.get("prenom")), like),
+                        cb.like(cb.lower(root.get("emailPro")), like)
+                ));
+            }
+            if (departementId != null) {
+                Join<Agent, Departement> dep = root.join("departement", JoinType.LEFT);
+                predicates.add(cb.equal(dep.get("id"), departementId));
+            }
+            if (statut != null && !statut.isBlank()) {
+                predicates.add(cb.equal(root.get("statut"), statut.trim().toUpperCase()));
+            }
+            return cb.and(predicates.toArray(Predicate[]::new));
+        };
+        return agentRepository.findAll(spec, pageable).map(this::toDto);
+    }
+
+    @Transactional
+    public Map<String, Object> create(CreateRequest request) {
+        if (agentRepository.findByEmailProIgnoreCase(request.emailPro()).isPresent()) {
+            throw new BusinessException("Un agent existe déjà avec cet e-mail professionnel");
+        }
+        String temporary = generatePassword();
+        Agent agent = new Agent();
+        agent.setEmailPro(request.emailPro().trim());
+        agent.setPasswordHash(passwordEncoder.encode(temporary));
+        agent.setNom(request.nom().trim());
+        agent.setPrenom(request.prenom().trim());
+        agent.setTelephone(blankToNull(request.telephone()));
+        agent.setStatut("ACTIF");
+        agent.setDoitChangerMotDePasse(true);
+        if (request.departementId() != null) {
+            agent.setDepartement(departementRepository.findById(request.departementId())
+                    .orElseThrow(() -> new BusinessException("Département introuvable")));
+        }
+        agentRepository.save(agent);
+        replaceRoles(agent, request.roles());
+        boolean mailSent = authService.envoyerBienvenueSiNecessaire(agent.getEmailPro());
+        auditService.record(JwtRoles.agentId(), "CREATE", "AGENT", agent.getId(), null, Map.of("email", agent.getEmailPro()));
+        Map<String, Object> body = toDto(agent);
+        body.put("motDePasseTemporaire", temporary);
+        body.put("emailBienvenueEnvoye", mailSent);
+        body.put("message", mailSent
+                ? "Agent enregistré. Un e-mail de bienvenue a été envoyé pour définir son mot de passe."
+                : "Agent enregistré. Transmettez le mot de passe temporaire une seule fois (e-mail de bienvenue non envoyé).");
+        return body;
+    }
+
+    @Transactional
+    public Map<String, Object> update(Long id, UpdateRequest request) {
+        assertNotSelf(id);
+        Agent agent = agentRepository.findById(id).orElseThrow(() -> new BusinessException("Agent introuvable", 404));
+        Map<String, Object> avant = Map.of("nom", String.valueOf(agent.getNom()), "prenom", String.valueOf(agent.getPrenom()));
+        if (request.nom() != null) {
+            if (request.nom().isBlank()) {
+                throw new BusinessException("Le nom est obligatoire");
+            }
+            agent.setNom(request.nom().trim());
+        }
+        if (request.prenom() != null) {
+            if (request.prenom().isBlank()) {
+                throw new BusinessException("Le prénom est obligatoire");
+            }
+            agent.setPrenom(request.prenom().trim());
+        }
+        if (request.telephone() != null) {
+            agent.setTelephone(blankToNull(request.telephone()));
+        }
+        if (request.departementId() != null) {
+            agent.setDepartement(departementRepository.findById(request.departementId())
+                    .orElseThrow(() -> new BusinessException("Département introuvable")));
+        }
+        if (request.roles() != null) {
+            replaceRoles(agent, request.roles());
+        }
+        auditService.record(JwtRoles.agentId(), "UPDATE", "AGENT", id, avant,
+                Map.of("nom", agent.getNom(), "prenom", agent.getPrenom()));
+        return toDto(agent);
+    }
+
+    @Transactional
+    public Map<String, Object> changeStatus(Long id, String statut) {
+        return changeStatus(id, statut, null);
+    }
+
+    @Transactional
+    public Map<String, Object> desactiver(Long id, String motif) {
+        if (motif == null || motif.isBlank()) {
+            throw new BusinessException("Le motif de désactivation est obligatoire");
+        }
+        return changeStatus(id, "INACTIF", motif.trim());
+    }
+
+    @Transactional
+    public Map<String, Object> reactiver(Long id) {
+        return changeStatus(id, "ACTIF", null);
+    }
+
+    @Transactional
+    public Map<String, Object> changeStatus(Long id, String statut, String motif) {
+        assertNotSelf(id);
+        String normalized = statut == null ? "" : statut.trim().toUpperCase();
+        if ("DESACTIVE".equals(normalized) || "SUSPENDU".equals(normalized)) {
+            normalized = "INACTIF";
+        }
+        if (!List.of("ACTIF", "INACTIF").contains(normalized)) {
+            throw new BusinessException("Statut agent invalide (ACTIF ou INACTIF)");
+        }
+        Agent agent = agentRepository.findById(id).orElseThrow(() -> new BusinessException("Agent introuvable", 404));
+        String before = agent.getStatut();
+        agent.setStatut(normalized);
+        if ("INACTIF".equals(normalized)) {
+            refreshTokenRepository.findByAgentIdAndRevokedFalse(id).forEach(token -> token.setRevoked(true));
+        }
+        auditService.record(JwtRoles.agentId(), "INACTIF".equals(normalized) ? "DISABLE" : "ENABLE", "AGENT", id,
+                Map.of("statut", before),
+                motif == null ? Map.of("statut", normalized) : Map.of("statut", normalized, "motif", motif));
+        return toDto(agent);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> get(Long id) {
+        Agent agent = agentRepository.findById(id).orElseThrow(() -> new BusinessException("Agent introuvable", 404));
+        Map<String, Object> body = toDto(agent);
+        List<Map<String, Object>> overrides = overrideRepository.findByAgentId(id).stream().map(this::toOverride).toList();
+        body.put("overrides", overrides);
+        body.put("permissionsEffectives", effectivePermissionService.calculerPermissionsEffectives(id, null).stream().sorted().toList());
+        return body;
+    }
+
+    @Transactional
+    public Map<String, Object> addOverride(Long agentId, Long permissionId, Long projectId, String type, String motif) {
+        assertNotSelf(agentId);
+        if (motif == null || motif.isBlank()) {
+            throw new BusinessException("Le motif de la dérogation est obligatoire");
+        }
+        String normalized = type == null ? "" : type.trim().toUpperCase();
+        if (!List.of("GRANT", "DENY").contains(normalized)) {
+            throw new BusinessException("Type de dérogation invalide (GRANT ou DENY)");
+        }
+        Agent agent = agentRepository.findById(agentId).orElseThrow(() -> new BusinessException("Agent introuvable", 404));
+        Permission permission = permissionRepository.findById(permissionId)
+                .orElseThrow(() -> new BusinessException("Permission introuvable", 404));
+        Project project = null;
+        if (projectId != null) {
+            project = projectRepository.findById(projectId).orElseThrow(() -> new BusinessException("Projet introuvable", 404));
+        }
+        AgentPermissionOverride existing = overrideRepository.findDuplicate(agentId, permissionId, projectId).orElse(null);
+        Map<String, Object> avant = existing == null ? null : Map.of("type", existing.getType(), "motif", existing.getMotif());
+        AgentPermissionOverride override = existing == null ? new AgentPermissionOverride() : existing;
+        override.setAgent(agent);
+        override.setPermission(permission);
+        override.setProject(project);
+        override.setType(normalized);
+        override.setMotif(motif.trim());
+        override.setAccordePar(agentRepository.findById(JwtRoles.agentId())
+                .orElseThrow(() -> new BusinessException("Agent connecté introuvable", 401)));
+        overrideRepository.save(override);
+        auditService.record(JwtRoles.agentId(), "OVERRIDE_" + normalized, "AGENT_PERMISSION", override.getId(),
+                avant,
+                Map.of("permission", permission.getCode(), "type", normalized, "motif", motif.trim(), "cibleId", agentId));
+        Map<String, Object> body = toOverride(override);
+        body.put("message", "GRANT".equals(normalized) ? "Permission individuelle accordée." : "Restriction individuelle enregistrée.");
+        return body;
+    }
+
+    @Transactional
+    public Map<String, Object> removeOverride(Long agentId, Long overrideId) {
+        assertNotSelf(agentId);
+        AgentPermissionOverride override = overrideRepository.findByIdAndAgentId(overrideId, agentId)
+                .orElseThrow(() -> new BusinessException("Dérogation introuvable", 404));
+        String code = override.getPermission().getCode();
+        String type = override.getType();
+        overrideRepository.delete(override);
+        auditService.record(JwtRoles.agentId(), "OVERRIDE_REMOVE", "AGENT_PERMISSION", overrideId,
+                Map.of("permission", code, "type", type, "cibleId", agentId), Map.of("removed", true));
+        return Map.of("message", "Dérogation retirée.", "id", overrideId);
+    }
+
+    private void assertNotSelf(Long targetAgentId) {
+        Long current = JwtRoles.agentId();
+        if (current != null && current.equals(targetAgentId)) {
+            throw new BusinessException("Vous ne pouvez pas modifier vos propres rôles, permissions ou statut.", 403);
+        }
+    }
+
+    private Map<String, Object> toOverride(AgentPermissionOverride override) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", override.getId());
+        row.put("type", override.getType());
+        row.put("motif", override.getMotif());
+        row.put("createdAt", override.getCreatedAt());
+        if (override.getPermission() != null) {
+            row.put("permissionId", override.getPermission().getId());
+            row.put("permission", override.getPermission().getCode());
+            row.put("permissionLibelle", override.getPermission().getLibelle());
+        }
+        row.put("projectId", override.getProject() == null ? null : override.getProject().getId());
+        row.put("projectCode", override.getProject() == null ? null : override.getProject().getCode());
+        if (override.getAccordePar() != null) {
+            row.put("accordePar", override.getAccordePar().getPrenom() + " " + override.getAccordePar().getNom());
+        }
+        return row;
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listDepartements() {
+        return departementRepository.findAll().stream().map(dep -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", dep.getId());
+            row.put("code", dep.getCode());
+            row.put("nom", dep.getNom());
+            return row;
+        }).toList();
+    }
+
+    private void replaceRoles(Agent agent, List<RoleAssign> roles) {
+        if (roles == null) {
+            return;
+        }
+        assertNotSelf(agent.getId());
+        agentRoleRepository.deleteByAgentId(agent.getId());
+        for (RoleAssign assign : roles) {
+            if (assign == null || assign.role() == null || assign.role().isBlank()) {
+                continue;
+            }
+            Role role = roleRepository.findByNom(assign.role().trim().toUpperCase())
+                    .orElseThrow(() -> new BusinessException("Rôle introuvable : " + assign.role()));
+            Project project = null;
+            if (assign.projectCode() != null && !assign.projectCode().isBlank()) {
+                project = projectRepository.findByCode(assign.projectCode())
+                        .orElseThrow(() -> new BusinessException("Projet introuvable"));
+            }
+            AgentRole entity = new AgentRole();
+            entity.setAgent(agent);
+            entity.setRole(role);
+            entity.setProject(project);
+            entity.setDateDebut(LocalDate.now());
+            agentRoleRepository.save(entity);
+        }
+    }
+
+    private Map<String, Object> toDto(Agent agent) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("id", agent.getId());
+        body.put("nom", agent.getNom());
+        body.put("prenom", agent.getPrenom());
+        body.put("emailPro", agent.getEmailPro());
+        body.put("telephone", agent.getTelephone());
+        body.put("statut", agent.getStatut());
+        body.put("createdAt", agent.getCreatedAt());
+        if (agent.getDepartement() != null) {
+            body.put("departement", Map.of(
+                    "id", agent.getDepartement().getId(),
+                    "nom", agent.getDepartement().getNom(),
+                    "code", agent.getDepartement().getCode()
+            ));
+        } else {
+            body.put("departement", null);
+        }
+        body.put("roles", agentRoleRepository.findByAgentId(agent.getId()).stream().map(ar -> {
+            Map<String, Object> role = new LinkedHashMap<>();
+            role.put("id", ar.getId());
+            role.put("role", ar.getRole().getNom());
+            role.put("projectCode", ar.getProject() == null ? null : ar.getProject().getCode());
+            role.put("projectNom", ar.getProject() == null ? null : ar.getProject().getNom());
+            return role;
+        }).toList());
+        body.put("hasOverrides", overrideRepository.countByAgentId(agent.getId()) > 0);
+        return body;
+    }
+
+    private String generatePassword() {
+        StringBuilder builder = new StringBuilder(12);
+        for (int i = 0; i < 12; i++) {
+            builder.append(PASSWORD_CHARS.charAt(random.nextInt(PASSWORD_CHARS.length())));
+        }
+        return builder.toString();
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    public record CreateRequest(String nom, String prenom, String emailPro, String telephone,
+                                Long departementId, List<RoleAssign> roles) {}
+
+    public record UpdateRequest(String nom, String prenom, String emailPro, String telephone,
+                                Long departementId, List<RoleAssign> roles) {}
+
+    public record RoleAssign(String role, String projectCode) {}
+}

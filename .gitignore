@@ -1,0 +1,4 @@
+.env
+.env.local
+application-secrets.yml
+target/

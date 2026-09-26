@@ -1,0 +1,34 @@
+# Profil local : Swagger, repair Flyway, CORS localhost.
+# Mot de passe MySQL : variable d'environnement DATABASE_PASSWORD (jamais commitée).
+
+spring:
+  datasource:
+    username: ${DATABASE_USERNAME:root}
+    password: ${DATABASE_PASSWORD:sharO123}
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+  kafka:
+    listener:
+      missing-topics-fatal: false
+      auto-startup: false
+    consumer:
+      auto-offset-reset: earliest
+
+ma:
+  kafka:
+    enabled: false
+  flyway:
+    repair-on-migrate: true
+  api-docs:
+    enabled: true
+  crypto:
+    aes-key: ${MA_AES_KEY:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+  auth:
+    demo-totp: ${MA_AUTH_DEMO_TOTP:false}
+    demo-totp-code: "000000"
+  errors:
+    expose-details: true
+  security:
+    cors:
+      allowed-origins: http://localhost:*,http://127.0.0.1:*
