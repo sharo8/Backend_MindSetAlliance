@@ -3,10 +3,12 @@ package com.mindsetalliance.core.audit;
 import com.mindsetalliance.core.iam.Agent;
 import com.mindsetalliance.core.iam.AgentRepository;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -18,6 +20,11 @@ public class AuditService {
     public AuditService(AuditLogRepository repository, AgentRepository agentRepository) {
         this.repository = repository;
         this.agentRepository = agentRepository;
+    }
+
+    @Transactional(readOnly = true)
+    public List<AuditLog> recentExports() {
+        return repository.findRecentByAction("EXPORT_REPORT", PageRequest.of(0, 5));
     }
 
     @Transactional

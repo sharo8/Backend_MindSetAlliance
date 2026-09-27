@@ -1,13 +1,18 @@
 package com.mindsetalliance.core.iam;
 
+import com.mindsetalliance.core.audit.AuditLog;
+import com.mindsetalliance.core.audit.AuditLogRepository;
 import com.mindsetalliance.core.audit.AuditService;
 import com.mindsetalliance.core.auth.AuthService;
 import com.mindsetalliance.core.auth.RefreshTokenRepository;
 import com.mindsetalliance.core.common.BusinessException;
 import com.mindsetalliance.core.common.security.JwtRoles;
+import com.mindsetalliance.core.notifications.AgentChangeNotifier;
 import jakarta.persistence.criteria.Join;
 import jakarta.persistence.criteria.JoinType;
 import jakarta.persistence.criteria.Predicate;
+import jakarta.persistence.criteria.Root;
+import jakarta.persistence.criteria.Subquery;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
@@ -38,6 +43,9 @@ public class AgentDirectoryService {
     private final PermissionRepository permissionRepository;
     private final AgentPermissionOverrideRepository overrideRepository;
     private final EffectivePermissionService effectivePermissionService;
+    private final AgentChangeNotifier agentChangeNotifier;
+    private final PermissionActionService permissionActionService;
+    private final AuditLogRepository auditLogRepository;
     private final SecureRandom random = new SecureRandom();
 
     public AgentDirectoryService(AgentRepository agentRepository, RoleRepository roleRepository,
@@ -46,7 +54,10 @@ public class AgentDirectoryService {
                                  PasswordEncoder passwordEncoder, AuditService auditService, AuthService authService,
                                  PermissionRepository permissionRepository,
                                  AgentPermissionOverrideRepository overrideRepository,
-                                 EffectivePermissionService effectivePermissionService) {
+                                 EffectivePermissionService effectivePermissionService,
+                                 AgentChangeNotifier agentChangeNotifier,
+                                 PermissionActionService permissionActionService,
+                                 AuditLogRepository auditLogRepository) {
         this.agentRepository = agentRepository;
         this.roleRepository = roleRepository;
         this.projectRepository = projectRepository;
@@ -59,10 +70,19 @@ public class AgentDirectoryService {
         this.permissionRepository = permissionRepository;
         this.overrideRepository = overrideRepository;
         this.effectivePermissionService = effectivePermissionService;
+        this.agentChangeNotifier = agentChangeNotifier;
+        this.permissionActionService = permissionActionService;
+        this.auditLogRepository = auditLogRepository;
     }
 
     @Transactional(readOnly = true)
     public Page<Map<String, Object>> list(String q, Long departementId, String statut, Pageable pageable) {
+        return list(q, departementId, statut, null, null, pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Map<String, Object>> list(String q, Long departementId, String statut, String roleNom, String scope,
+                                          Pageable pageable) {
         Specification<Agent> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             if (q != null && !q.isBlank()) {
@@ -79,6 +99,43 @@ public class AgentDirectoryService {
             }
             if (statut != null && !statut.isBlank()) {
                 predicates.add(cb.equal(root.get("statut"), statut.trim().toUpperCase()));
+            }
+            if (roleNom != null && !roleNom.isBlank()) {
+                Subquery<Long> sq = query.subquery(Long.class);
+                Root<AgentRole> ar = sq.from(AgentRole.class);
+                sq.select(ar.get("id"));
+                sq.where(
+                        cb.equal(ar.get("agent").get("id"), root.get("id")),
+                        cb.equal(ar.get("role").get("nom"), roleNom.trim().toUpperCase())
+                );
+                predicates.add(cb.exists(sq));
+            }
+            if (scope != null && !scope.isBlank()) {
+                String normalized = scope.trim().toUpperCase();
+                Subquery<Long> wide = query.subquery(Long.class);
+                Root<AgentRole> wideRoot = wide.from(AgentRole.class);
+                wide.select(wideRoot.get("id"));
+                wide.where(cb.equal(wideRoot.get("agent").get("id"), root.get("id")), cb.isNull(wideRoot.get("project")));
+                if ("ENTREPRISE".equals(normalized)) {
+                    predicates.add(cb.exists(wide));
+                } else if ("PROJECT".equals(normalized) || "PROJET".equals(normalized)) {
+                    Subquery<Long> scoped = query.subquery(Long.class);
+                    Root<AgentRole> scopedRoot = scoped.from(AgentRole.class);
+                    scoped.select(scopedRoot.get("id"));
+                    scoped.where(cb.equal(scopedRoot.get("agent").get("id"), root.get("id")), cb.isNotNull(scopedRoot.get("project")));
+                    predicates.add(cb.and(cb.exists(scoped), cb.not(cb.exists(wide))));
+                } else {
+                    Subquery<Long> byProject = query.subquery(Long.class);
+                    Root<AgentRole> projectRoot = byProject.from(AgentRole.class);
+                    Join<AgentRole, Project> project = projectRoot.join("project");
+                    byProject.select(projectRoot.get("id"));
+                    Predicate codeMatch = cb.equal(cb.upper(project.get("code")), normalized);
+                    if (normalized.chars().allMatch(Character::isDigit)) {
+                        codeMatch = cb.or(codeMatch, cb.equal(project.get("id"), Long.parseLong(normalized)));
+                    }
+                    byProject.where(cb.equal(projectRoot.get("agent").get("id"), root.get("id")), codeMatch);
+                    predicates.add(cb.exists(byProject));
+                }
             }
             return cb.and(predicates.toArray(Predicate[]::new));
         };
@@ -99,14 +156,15 @@ public class AgentDirectoryService {
         agent.setTelephone(blankToNull(request.telephone()));
         agent.setStatut("ACTIF");
         agent.setDoitChangerMotDePasse(true);
-        if (request.departementId() != null) {
-            agent.setDepartement(departementRepository.findById(request.departementId())
-                    .orElseThrow(() -> new BusinessException("Département introuvable")));
+        agent.setDepartement(requireDepartement(request.departementId(), true));
+        if (request.photo() != null && !request.photo().isBlank()) {
+            PhotoProfilUtil.apply(agent, request.photo());
         }
         agentRepository.save(agent);
         replaceRoles(agent, request.roles());
         boolean mailSent = authService.envoyerBienvenueSiNecessaire(agent.getEmailPro());
-        auditService.record(JwtRoles.agentId(), "CREATE", "AGENT", agent.getId(), null, Map.of("email", agent.getEmailPro()));
+        auditService.record(JwtRoles.agentId(), "CREATE", "AGENT", agent.getId(), null,
+                Map.of("email", agent.getEmailPro(), "entite", agent.getPrenom() + " " + agent.getNom()));
         Map<String, Object> body = toDto(agent);
         body.put("motDePasseTemporaire", temporary);
         body.put("emailBienvenueEnvoye", mailSent);
@@ -120,6 +178,7 @@ public class AgentDirectoryService {
     public Map<String, Object> update(Long id, UpdateRequest request) {
         assertNotSelf(id);
         Agent agent = agentRepository.findById(id).orElseThrow(() -> new BusinessException("Agent introuvable", 404));
+        String before = agentChangeNotifier.snapshot(id);
         Map<String, Object> avant = Map.of("nom", String.valueOf(agent.getNom()), "prenom", String.valueOf(agent.getPrenom()));
         if (request.nom() != null) {
             if (request.nom().isBlank()) {
@@ -137,14 +196,22 @@ public class AgentDirectoryService {
             agent.setTelephone(blankToNull(request.telephone()));
         }
         if (request.departementId() != null) {
-            agent.setDepartement(departementRepository.findById(request.departementId())
-                    .orElseThrow(() -> new BusinessException("Département introuvable")));
+            agent.setDepartement(requireDepartement(request.departementId(), false));
+        }
+        if (request.photo() != null) {
+            if (request.photo().isBlank()) {
+                agent.setPhotoProfil(null);
+                agent.setPhotoMime(null);
+            } else {
+                PhotoProfilUtil.apply(agent, request.photo());
+            }
         }
         if (request.roles() != null) {
             replaceRoles(agent, request.roles());
         }
+        agentChangeNotifier.notifyIfChanged(id, before);
         auditService.record(JwtRoles.agentId(), "UPDATE", "AGENT", id, avant,
-                Map.of("nom", agent.getNom(), "prenom", agent.getPrenom()));
+                Map.of("nom", agent.getNom(), "prenom", agent.getPrenom(), "entite", agent.getPrenom() + " " + agent.getNom()));
         return toDto(agent);
     }
 
@@ -158,7 +225,20 @@ public class AgentDirectoryService {
         if (motif == null || motif.isBlank()) {
             throw new BusinessException("Le motif de désactivation est obligatoire");
         }
-        return changeStatus(id, "INACTIF", motif.trim());
+        Map<String, Object> body = changeStatus(id, "INACTIF", motif.trim(), "DISABLE");
+        agentChangeNotifier.notifyDeactivated(id);
+        return body;
+    }
+
+    @Transactional
+    public Map<String, Object> supprimer(Long id, String motif) {
+        if (motif == null || motif.isBlank()) {
+            throw new BusinessException("Le motif de suppression est obligatoire");
+        }
+        Map<String, Object> body = changeStatus(id, "INACTIF", motif.trim(), "DELETE");
+        agentChangeNotifier.notifyDeactivated(id);
+        body.put("message", "Agent retiré de l’annuaire (aucune suppression physique).");
+        return body;
     }
 
     @Transactional
@@ -168,9 +248,14 @@ public class AgentDirectoryService {
 
     @Transactional
     public Map<String, Object> changeStatus(Long id, String statut, String motif) {
+        return changeStatus(id, statut, motif, null);
+    }
+
+    @Transactional
+    public Map<String, Object> changeStatus(Long id, String statut, String motif, String auditAction) {
         assertNotSelf(id);
         String normalized = statut == null ? "" : statut.trim().toUpperCase();
-        if ("DESACTIVE".equals(normalized) || "SUSPENDU".equals(normalized)) {
+        if ("DESACTIVE".equals(normalized) || "SUSPENDU".equals(normalized) || "SUPPRIME".equals(normalized)) {
             normalized = "INACTIF";
         }
         if (!List.of("ACTIF", "INACTIF").contains(normalized)) {
@@ -182,9 +267,14 @@ public class AgentDirectoryService {
         if ("INACTIF".equals(normalized)) {
             refreshTokenRepository.findByAgentIdAndRevokedFalse(id).forEach(token -> token.setRevoked(true));
         }
-        auditService.record(JwtRoles.agentId(), "INACTIF".equals(normalized) ? "DISABLE" : "ENABLE", "AGENT", id,
+        String action = auditAction != null && !auditAction.isBlank()
+                ? auditAction
+                : ("INACTIF".equals(normalized) ? "DISABLE" : "ENABLE");
+        auditService.record(JwtRoles.agentId(), action, "AGENT", id,
                 Map.of("statut", before),
-                motif == null ? Map.of("statut", normalized) : Map.of("statut", normalized, "motif", motif));
+                motif == null
+                        ? Map.of("statut", normalized, "entite", agent.getPrenom() + " " + agent.getNom())
+                        : Map.of("statut", normalized, "motif", motif, "entite", agent.getPrenom() + " " + agent.getNom()));
         return toDto(agent);
     }
 
@@ -195,19 +285,49 @@ public class AgentDirectoryService {
         List<Map<String, Object>> overrides = overrideRepository.findByAgentId(id).stream().map(this::toOverride).toList();
         body.put("overrides", overrides);
         body.put("permissionsEffectives", effectivePermissionService.calculerPermissionsEffectives(id, null).stream().sorted().toList());
+        java.util.Map<String, java.util.List<String>> byProject = new LinkedHashMap<>();
+        for (Project project : projectRepository.findAll()) {
+            if (project.getCode() == null || "INACTIF".equalsIgnoreCase(project.getStatut())) {
+                continue;
+            }
+            byProject.put(project.getCode(), effectivePermissionService.calculerPermissionsEffectives(id, project.getCode()).stream().sorted().toList());
+        }
+        body.put("permissionsEffectivesParProjet", byProject);
+        body.put("permissionActions", permissionActionService.listForAgent(id));
+        auditLogRepository.findFirstByObjetTypeAndObjetIdAndActionInOrderByCreatedAtDesc(
+                "AGENT", id, List.of("UPDATE", "DISABLE", "ENABLE", "DELETE")).ifPresent(log -> {
+            Map<String, Object> last = new LinkedHashMap<>();
+            last.put("id", log.getId());
+            last.put("action", log.getAction());
+            last.put("createdAt", log.getCreatedAt());
+            if (log.getAgent() != null) {
+                last.put("auteur", (log.getAgent().getPrenom() + " " + log.getAgent().getNom()).trim());
+                last.put("auteurEmail", log.getAgent().getEmailPro());
+            }
+            body.put("derniereModification", last);
+        });
         return body;
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.List<String> permissionsEffectives(Long id, String projectCode) {
+        agentRepository.findById(id).orElseThrow(() -> new BusinessException("Agent introuvable", 404));
+        return effectivePermissionService.calculerPermissionsEffectives(id, projectCode).stream().sorted().toList();
     }
 
     @Transactional
     public Map<String, Object> addOverride(Long agentId, Long permissionId, Long projectId, String type, String motif) {
         assertNotSelf(agentId);
-        if (motif == null || motif.isBlank()) {
-            throw new BusinessException("Le motif de la dérogation est obligatoire");
-        }
         String normalized = type == null ? "" : type.trim().toUpperCase();
         if (!List.of("GRANT", "DENY").contains(normalized)) {
             throw new BusinessException("Type de dérogation invalide (GRANT ou DENY)");
         }
+        if ("DENY".equals(normalized) && (motif == null || motif.isBlank())) {
+            throw new BusinessException("Le motif est obligatoire pour une restriction DENY");
+        }
+        String resolvedMotif = (motif == null || motif.isBlank())
+                ? "Personnalisation des permissions (Accès agent)"
+                : motif.trim();
         Agent agent = agentRepository.findById(agentId).orElseThrow(() -> new BusinessException("Agent introuvable", 404));
         Permission permission = permissionRepository.findById(permissionId)
                 .orElseThrow(() -> new BusinessException("Permission introuvable", 404));
@@ -222,13 +342,13 @@ public class AgentDirectoryService {
         override.setPermission(permission);
         override.setProject(project);
         override.setType(normalized);
-        override.setMotif(motif.trim());
+        override.setMotif(resolvedMotif);
         override.setAccordePar(agentRepository.findById(JwtRoles.agentId())
                 .orElseThrow(() -> new BusinessException("Agent connecté introuvable", 401)));
         overrideRepository.save(override);
         auditService.record(JwtRoles.agentId(), "OVERRIDE_" + normalized, "AGENT_PERMISSION", override.getId(),
                 avant,
-                Map.of("permission", permission.getCode(), "type", normalized, "motif", motif.trim(), "cibleId", agentId));
+                Map.of("permission", permission.getCode(), "type", normalized, "motif", resolvedMotif, "cibleId", agentId));
         Map<String, Object> body = toOverride(override);
         body.put("message", "GRANT".equals(normalized) ? "Permission individuelle accordée." : "Restriction individuelle enregistrée.");
         return body;
@@ -275,13 +395,42 @@ public class AgentDirectoryService {
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> listDepartements() {
-        return departementRepository.findAll().stream().map(dep -> {
+        return departementRepository.findAllWithRoles().stream()
+                .sorted(java.util.Comparator.comparing(Departement::getNom, String.CASE_INSENSITIVE_ORDER))
+                .map(dep -> {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", dep.getId());
             row.put("code", dep.getCode());
             row.put("nom", dep.getNom());
+            row.put("description", dep.getDescription());
+            row.put("statut", dep.getStatut() == null ? "ACTIF" : dep.getStatut());
+            row.put("roles", dep.getRolesDefaut().stream().map(role -> {
+                Map<String, Object> r = new LinkedHashMap<>();
+                r.put("id", role.getId());
+                r.put("nom", role.getNom());
+                return r;
+            }).toList());
             return row;
         }).toList();
+    }
+
+    private boolean resolveHasPhoto(Agent agent) {
+        if (org.hibernate.Hibernate.isPropertyInitialized(agent, "photoProfil")) {
+            return PhotoProfilUtil.hasPhoto(agent);
+        }
+        return agent.isHasPhoto();
+    }
+
+    private Departement requireDepartement(Long departementId, boolean mustBeActive) {
+        if (departementId == null) {
+            throw new BusinessException("Le département est obligatoire");
+        }
+        Departement dep = departementRepository.findById(departementId)
+                .orElseThrow(() -> new BusinessException("Département introuvable"));
+        if (mustBeActive && "INACTIF".equals(dep.getStatut())) {
+            throw new BusinessException("Ce département n’est plus proposé pour un nouvel agent");
+        }
+        return dep;
     }
 
     private void replaceRoles(Agent agent, List<RoleAssign> roles) {
@@ -336,6 +485,7 @@ public class AgentDirectoryService {
             role.put("projectNom", ar.getProject() == null ? null : ar.getProject().getNom());
             return role;
         }).toList());
+        body.put("hasPhoto", resolveHasPhoto(agent));
         body.put("hasOverrides", overrideRepository.countByAgentId(agent.getId()) > 0);
         return body;
     }
@@ -353,10 +503,10 @@ public class AgentDirectoryService {
     }
 
     public record CreateRequest(String nom, String prenom, String emailPro, String telephone,
-                                Long departementId, List<RoleAssign> roles) {}
+                                Long departementId, List<RoleAssign> roles, String photo) {}
 
     public record UpdateRequest(String nom, String prenom, String emailPro, String telephone,
-                                Long departementId, List<RoleAssign> roles) {}
+                                Long departementId, List<RoleAssign> roles, String photo) {}
 
     public record RoleAssign(String role, String projectCode) {}
 }

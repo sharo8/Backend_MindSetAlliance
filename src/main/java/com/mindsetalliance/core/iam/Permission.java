@@ -16,6 +16,7 @@ public class Permission {
     private String code;
     private String module;
     private String libelle;
+    private boolean decomposable;
 
     public Long getId() { return id; }
     public String getCode() { return code; }
@@ -24,4 +25,6 @@ public class Permission {
     public void setModule(String module) { this.module = module; }
     public String getLibelle() { return libelle; }
     public void setLibelle(String libelle) { this.libelle = libelle; }
+    public boolean isDecomposable() { return decomposable; }
+    public void setDecomposable(boolean decomposable) { this.decomposable = decomposable; }
 }

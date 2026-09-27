@@ -76,4 +76,12 @@ public class Agent {
     public boolean isWelcomeEmailSent() { return welcomeEmailSent; }
     public void setWelcomeEmailSent(boolean welcomeEmailSent) { this.welcomeEmailSent = welcomeEmailSent; }
     public Instant getCreatedAt() { return createdAt; }
+
+    @org.hibernate.annotations.Formula("(photo_profil is not null and length(photo_profil) > 0)")
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private boolean photoPresent;
+
+    public boolean isHasPhoto() {
+        return photoPresent;
+    }
 }

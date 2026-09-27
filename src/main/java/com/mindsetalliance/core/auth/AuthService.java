@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 public class AuthService {
@@ -298,8 +299,19 @@ public class AuthService {
         String lien = trimSlash(frontendBaseUrl) + "/definir-mot-de-passe?token=" + raw;
         String nom = ((agent.getPrenom() == null ? "" : agent.getPrenom()) + " "
                 + (agent.getNom() == null ? "" : agent.getNom())).trim();
+        String roles = agentRoleRepository.findByAgentId(agent.getId()).stream()
+                .map(ar -> {
+                    String role = ar.getRole() == null ? "" : ar.getRole().getNom();
+                    String projet = ar.getProject() == null ? "toute l’entreprise"
+                            : (ar.getProject().getNom() != null ? ar.getProject().getNom() : ar.getProject().getCode());
+                    return role + " (" + projet + ")";
+                })
+                .sorted()
+                .collect(Collectors.joining(" · "));
         try {
-            emailService.envoyerBienvenue(agent.getEmailPro(), nom.isBlank() ? "Aline Kabacele" : nom, lien);
+            emailService.envoyerBienvenue(agent.getEmailPro(), nom.isBlank() ? agent.getEmailPro() : nom, lien,
+                    agent.getDepartement() == null ? "—" : agent.getDepartement().getNom(),
+                    roles.isBlank() ? "—" : roles);
         } catch (RuntimeException ex) {
             log.warn("E-mail de bienvenue non envoyé (SMTP).");
             return false;
@@ -332,34 +344,11 @@ public class AuthService {
                 agent.setPhotoProfil(null);
                 agent.setPhotoMime(null);
             } else {
-                applyPhoto(agent, photo);
+                com.mindsetalliance.core.iam.PhotoProfilUtil.apply(agent, photo);
             }
         }
         auditService.record(agentId, "UPDATE_PROFILE", "AGENT", agentId, null, Map.of("ok", true));
         return currentAgent(agentId);
-    }
-
-    private void applyPhoto(Agent agent, String photo) {
-        int comma = photo.indexOf(',');
-        if (comma < 0 || !photo.startsWith("data:")) {
-            throw new BusinessException("La photo de profil est invalide");
-        }
-        String header = photo.substring(5, comma);
-        String mime = header.contains(";") ? header.substring(0, header.indexOf(';')) : header;
-        if (!Set.of("image/jpeg", "image/png", "image/webp", "image/gif").contains(mime)) {
-            throw new BusinessException("Le format de photo n’est pas accepté (JPEG, PNG, WebP ou GIF)");
-        }
-        byte[] bytes;
-        try {
-            bytes = java.util.Base64.getDecoder().decode(photo.substring(comma + 1));
-        } catch (IllegalArgumentException ex) {
-            throw new BusinessException("La photo de profil est invalide");
-        }
-        if (bytes.length > 2_000_000) {
-            throw new BusinessException("La photo de profil ne doit pas dépasser 2 Mo");
-        }
-        agent.setPhotoMime(mime);
-        agent.setPhotoProfil(bytes);
     }
 
     public Map<String, Object> jwks() {

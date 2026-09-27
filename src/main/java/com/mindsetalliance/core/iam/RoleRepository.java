@@ -12,4 +12,7 @@ public interface RoleRepository extends JpaRepository<Role, Long> {
 
     @Query("select count(r) from Role r join r.permissions p where r.nom in :noms and p.code = :code")
     long countHavingPermission(@Param("noms") Collection<String> noms, @Param("code") String code);
+
+    @Query("select distinct r from Role r left join fetch r.permissions")
+    java.util.List<Role> findAllWithPermissions();
 }

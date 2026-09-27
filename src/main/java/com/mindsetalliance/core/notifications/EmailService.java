@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -54,14 +55,101 @@ public class EmailService {
     }
 
     public void envoyerBienvenue(String destinataire, String nomComplet, String lienDefinitionMotDePasse) {
-        String plain = "Bienvenue " + nomComplet + ". Définissez votre mot de passe (24 h) : " + lienDefinitionMotDePasse;
+        envoyerBienvenue(destinataire, nomComplet, lienDefinitionMotDePasse, null, null);
+    }
+
+    public void envoyerBienvenue(String destinataire, String nomComplet, String lienDefinitionMotDePasse,
+                                 String departement, String roles) {
+        String dept = departement == null || departement.isBlank() ? "—" : departement;
+        String roleTxt = roles == null || roles.isBlank() ? "—" : roles;
+        String plain = "Bienvenue " + nomComplet + ". Département : " + dept + ". Rôles : " + roleTxt
+                + ". Définissez votre mot de passe (24 h) : " + lienDefinitionMotDePasse;
         String html = layout(
                 "Bienvenue sur MA Workspace",
                 "<p style=\"margin:0 0 16px;color:#d5dcec;font-size:15px;line-height:1.6;\">Bonjour " + escape(nomComplet)
-                        + ", votre compte administrateur est prêt.</p>"
+                        + ", votre compte MA Workspace est prêt.</p>"
+                        + recapRow("Département", dept)
+                        + recapRow("Rôle(s)", roleTxt)
                         + cta("Définir mon mot de passe", lienDefinitionMotDePasse)
                         + "<p style=\"margin:20px 0 0;color:#9aa6c2;font-size:13px;line-height:1.55;\">Ce lien est valable 24 heures. Un code de vérification vous sera ensuite envoyé par e-mail.</p>");
         envoyer(destinataire, "Bienvenue sur MA Workspace", plain, html);
+    }
+
+    @Async
+    public void envoyerChangementAccesAsync(String destinataire, String nomComplet, String avant, String apres,
+                                            String date, String auteur) {
+        envoyerSansBloquer(() -> {
+            String plain = "Bonjour " + nomComplet + ". Vos accès MA Workspace ont été mis à jour le " + date
+                    + " par " + auteur + ".\n\nAvant :\n" + avant + "\n\nAprès :\n" + apres;
+            log.info("E-mail changement d'acces (texte) : {}", plain.replace("\n", " | "));
+            String html = layout(
+                    "Mise à jour de vos accès",
+                    "<p style=\"margin:0 0 16px;color:#d5dcec;font-size:15px;line-height:1.6;\">Bonjour " + escape(nomComplet)
+                            + ", un administrateur a modifié vos accès le <strong style=\"color:#f6d06a;\">" + escape(date)
+                            + "</strong>.</p>"
+                            + recapRow("Modifié par", auteur)
+                            + "<p style=\"margin:18px 0 8px;letter-spacing:0.16em;font-size:11px;color:#f6d06a;\">AVANT</p>"
+                            + "<p style=\"margin:0 0 16px;color:#d5dcec;font-size:14px;line-height:1.6;white-space:pre-line;\">" + escape(avant) + "</p>"
+                            + "<p style=\"margin:18px 0 8px;letter-spacing:0.16em;font-size:11px;color:#f6d06a;\">APRÈS</p>"
+                            + "<p style=\"margin:0 0 8px;color:#d5dcec;font-size:14px;line-height:1.6;white-space:pre-line;\">" + escape(apres) + "</p>"
+                            + "<p style=\"margin:20px 0 0;color:#9aa6c2;font-size:13px;line-height:1.55;\">Si cette modification vous surprend, contactez votre administrateur.</p>");
+            envoyer(destinataire, "Vos accès MA Workspace ont été mis à jour", plain, html);
+        });
+    }
+
+    @Async
+    public void envoyerMatricePermissionsAsync(String destinataire, String nomComplet, String rolesPhrase,
+                                               String details, String date, String auteur) {
+        envoyerSansBloquer(() -> {
+            String plain = "Bonjour " + nomComplet + ". Les permissions associées à " + rolesPhrase
+                    + " ont été mises à jour le " + date + " par " + auteur + ".\n\n" + details;
+            log.info("E-mail matrice rôles (texte) : {}", plain.replace("\n", " | "));
+            String html = layout(
+                    "Permissions de votre rôle",
+                    "<p style=\"margin:0 0 16px;color:#d5dcec;font-size:15px;line-height:1.6;\">Bonjour "
+                            + escape(nomComplet)
+                            + ", les permissions associées à <strong style=\"color:#f6d06a;\">" + escape(rolesPhrase)
+                            + "</strong> ont été mises à jour le <strong style=\"color:#f6d06a;\">" + escape(date)
+                            + "</strong> par " + escape(auteur) + ".</p>"
+                            + recapRow("Modifié par", auteur)
+                            + "<p style=\"margin:18px 0 8px;letter-spacing:0.16em;font-size:11px;color:#f6d06a;\">DÉTAIL</p>"
+                            + "<p style=\"margin:0 0 8px;color:#d5dcec;font-size:14px;line-height:1.6;white-space:pre-line;\">"
+                            + escape(details) + "</p>"
+                            + "<p style=\"margin:20px 0 0;color:#9aa6c2;font-size:13px;line-height:1.55;\">Si cette modification vous surprend, contactez votre administrateur.</p>");
+            envoyer(destinataire, "Les permissions de votre rôle ont été mises à jour", plain, html);
+        });
+    }
+
+    @Async
+    public void envoyerDesactivationAsync(String destinataire, String nomComplet, String date) {
+        envoyerSansBloquer(() -> {
+            String plain = "Bonjour " + nomComplet + ". Votre compte MA Workspace a été désactivé le " + date + ".";
+            log.info("E-mail désactivation (texte) : {}", plain);
+            String html = layout(
+                    "Compte désactivé",
+                    "<p style=\"margin:0 0 16px;color:#d5dcec;font-size:15px;line-height:1.6;\">Bonjour " + escape(nomComplet)
+                            + ", votre accès à MA Workspace a été désactivé le <strong style=\"color:#f6d06a;\">"
+                            + escape(date) + "</strong>.</p>"
+                            + "<p style=\"margin:0;color:#9aa6c2;font-size:13px;line-height:1.55;\">Pour toute question, contactez votre administrateur. Aucun mot de passe n’est inclus dans ce message.</p>");
+            envoyer(destinataire, "Votre compte MA Workspace a été désactivé", plain, html);
+        });
+    }
+
+    private void envoyerSansBloquer(Runnable envoi) {
+        if (!isConfigured()) {
+            log.warn("E-mail administratif non envoyé : SMTP non configuré.");
+            return;
+        }
+        try {
+            envoi.run();
+        } catch (Exception ex) {
+            log.warn("Échec d’envoi e-mail administratif (action conservée) : {}", sanitizeSmtpError(ex));
+        }
+    }
+
+    private static String recapRow(String label, String value) {
+        return "<p style=\"margin:0 0 10px;color:#d5dcec;font-size:14px;line-height:1.55;\"><span style=\"color:#f6d06a;letter-spacing:0.12em;font-size:11px;\">"
+                + escape(label).toUpperCase() + "</span><br>" + escape(value) + "</p>";
     }
 
     public void envoyerTest(String destinataire) {

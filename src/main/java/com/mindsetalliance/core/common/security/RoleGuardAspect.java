@@ -54,14 +54,19 @@ public class RoleGuardAspect {
         if (agentId == null) {
             throw new AccessDeniedException("Permission insuffisante");
         }
+        String projectCode = JwtRoles.requestProjectCode();
+        String action = require.action();
         boolean allowed = Arrays.stream(require.value()).anyMatch(code -> {
-            if (effectivePermissionService.isDenied(agentId, code, null)) {
+            if (effectivePermissionService.isDenied(agentId, code, projectCode)) {
                 return false;
             }
             if (JwtRoles.hasFullAccess(jwt)) {
                 return true;
             }
-            return effectivePermissionService.hasPermission(agentId, code, null);
+            if (action == null || action.isBlank()) {
+                return effectivePermissionService.hasPermission(agentId, code, projectCode);
+            }
+            return effectivePermissionService.hasAction(agentId, code, action, projectCode);
         });
         if (!allowed) {
             throw new AccessDeniedException("Permission insuffisante");

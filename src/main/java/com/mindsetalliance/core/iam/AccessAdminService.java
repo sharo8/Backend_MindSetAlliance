@@ -1,8 +1,11 @@
 package com.mindsetalliance.core.iam;
 
+import com.mindsetalliance.core.audit.AuditLog;
+import com.mindsetalliance.core.audit.AuditLogRepository;
 import com.mindsetalliance.core.audit.AuditService;
 import com.mindsetalliance.core.common.BusinessException;
 import com.mindsetalliance.core.common.security.JwtRoles;
+import com.mindsetalliance.core.notifications.AgentChangeNotifier;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
@@ -27,15 +30,20 @@ public class AccessAdminService {
     private final ProjectRepository projectRepository;
     private final AgentRoleRepository agentRoleRepository;
     private final AuditService auditService;
+    private final AuditLogRepository auditLogRepository;
+    private final AgentChangeNotifier agentChangeNotifier;
 
     public AccessAdminService(AgentRepository agentRepository, RoleRepository roleRepository,
                               ProjectRepository projectRepository, AgentRoleRepository agentRoleRepository,
-                              AuditService auditService) {
+                              AuditService auditService, AuditLogRepository auditLogRepository,
+                              AgentChangeNotifier agentChangeNotifier) {
         this.agentRepository = agentRepository;
         this.roleRepository = roleRepository;
         this.projectRepository = projectRepository;
         this.agentRoleRepository = agentRoleRepository;
         this.auditService = auditService;
+        this.auditLogRepository = auditLogRepository;
+        this.agentChangeNotifier = agentChangeNotifier;
     }
 
     @Transactional(readOnly = true)
@@ -64,6 +72,13 @@ public class AccessAdminService {
 
     @Transactional
     public Map<String, Object> assign(Long agentId, Long roleId, Long projectId) {
+        String before = agentChangeNotifier.snapshot(agentId);
+        Map<String, Object> body = assignQuiet(agentId, roleId, projectId);
+        agentChangeNotifier.notifyIfChanged(agentId, before);
+        return body;
+    }
+
+    private Map<String, Object> assignQuiet(Long agentId, Long roleId, Long projectId) {
         if (JwtRoles.agentId().equals(agentId)) {
             throw new BusinessException("Vous ne pouvez pas modifier vos propres rôles, permissions ou statut.", 403);
         }
@@ -97,6 +112,16 @@ public class AccessAdminService {
 
     @Transactional
     public Map<String, Object> revoke(Long agentId, Long agentRoleId) {
+        AgentRole assignment = agentRoleRepository.findById(agentRoleId)
+                .orElseThrow(() -> new BusinessException("Attribution introuvable", 404));
+        Long cibleId = assignment.getAgent() == null ? agentId : assignment.getAgent().getId();
+        String before = agentChangeNotifier.snapshot(cibleId);
+        Map<String, Object> body = revokeQuiet(agentId, agentRoleId);
+        agentChangeNotifier.notifyIfChanged(cibleId, before);
+        return body;
+    }
+
+    private Map<String, Object> revokeQuiet(Long agentId, Long agentRoleId) {
         if (JwtRoles.agentId().equals(agentId)) {
             throw new BusinessException("Vous ne pouvez pas modifier vos propres rôles, permissions ou statut.", 403);
         }
@@ -214,6 +239,8 @@ public class AccessAdminService {
         } else {
             row.put("departement", null);
         }
+        row.put("hasPhoto", agent.isHasPhoto());
+        row.put("createdAt", agent.getCreatedAt());
         row.put("roles", agentRoleRepository.findByAgentId(agent.getId()).stream().map(this::toAssignment).toList());
         return row;
     }
@@ -230,4 +257,114 @@ public class AccessAdminService {
         row.put("dateFin", assignment.getDateFin());
         return row;
     }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> accessStats() {
+        List<Agent> all = agentRepository.findAll();
+        long actifs = all.stream().filter(a -> "ACTIF".equals(a.getStatut())).count();
+        long entreprise = 0;
+        long projetSeul = 0;
+        for (Agent agent : all) {
+            List<AgentRole> roles = agentRoleRepository.findByAgentId(agent.getId());
+            boolean wide = roles.stream().anyMatch(r -> r.getProject() == null);
+            long projects = roles.stream()
+                    .filter(r -> r.getProject() != null)
+                    .map(r -> r.getProject().getId())
+                    .distinct()
+                    .count();
+            if (wide) {
+                entreprise++;
+            } else if (projects == 1) {
+                projetSeul++;
+            }
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("total", all.size());
+        body.put("actifs", actifs);
+        body.put("entreprise", entreprise);
+        body.put("projetSeul", projetSeul);
+        return body;
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> accessHistory(Long agentId) {
+        agentRepository.findById(agentId).orElseThrow(() -> new BusinessException("Agent introuvable", 404));
+        return auditLogRepository
+                .findTop200ByActionInOrderByCreatedAtDesc(List.of("ASSIGN_ROLE", "REVOKE_ROLE", "CREATE"))
+                .stream()
+                .filter(log -> matchesAgent(log, agentId))
+                .limit(40)
+                .map(this::toHistory)
+                .toList();
+    }
+
+    @Transactional
+    public Map<String, Object> syncAccess(Long agentId, Long companyRoleId, List<ProjectAccess> projects) {
+        String before = agentChangeNotifier.snapshot(agentId);
+        replaceScope(agentId, null, companyRoleId);
+        for (ProjectAccess row : projects) {
+            if (row == null || row.projectId() == null) {
+                continue;
+            }
+            replaceScope(agentId, row.projectId(), row.roleId());
+        }
+        agentChangeNotifier.notifyIfChanged(agentId, before);
+        return Map.of("message", "Accès mis à jour.", "roles", rolesOf(agentId));
+    }
+
+    private void replaceScope(Long agentId, Long projectId, Long roleId) {
+        List<AgentRole> current = agentRoleRepository.findByAgentId(agentId).stream()
+                .filter(ar -> projectId == null
+                        ? ar.getProject() == null
+                        : ar.getProject() != null && ar.getProject().getId().equals(projectId))
+                .toList();
+        if (roleId == null) {
+            for (AgentRole assignment : current) {
+                revokeQuiet(agentId, assignment.getId());
+            }
+            return;
+        }
+        boolean already = current.stream().anyMatch(ar -> ar.getRole().getId().equals(roleId));
+        for (AgentRole assignment : current) {
+            if (!assignment.getRole().getId().equals(roleId)) {
+                revokeQuiet(agentId, assignment.getId());
+            }
+        }
+        if (!already) {
+            assignQuiet(agentId, roleId, projectId);
+        }
+    }
+
+    private boolean matchesAgent(AuditLog log, Long agentId) {
+        if ("CREATE".equals(log.getAction()) && "AGENT".equals(log.getObjetType()) && agentId.equals(log.getObjetId())) {
+            return true;
+        }
+        Object id = log.getValeurApres() != null ? log.getValeurApres().get("cibleId") : null;
+        if (id == null && log.getValeurAvant() != null) {
+            id = log.getValeurAvant().get("cibleId");
+        }
+        if (id instanceof Number number) {
+            return agentId.equals(number.longValue());
+        }
+        return id != null && agentId.toString().equals(String.valueOf(id));
+    }
+
+    private Map<String, Object> toHistory(AuditLog log) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", log.getId());
+        row.put("action", log.getAction());
+        row.put("createdAt", log.getCreatedAt());
+        if (log.getAgent() != null) {
+            row.put("auteur", (log.getAgent().getPrenom() + " " + log.getAgent().getNom()).trim());
+        }
+        Map<String, Object> details = log.getValeurApres() != null ? log.getValeurApres() : log.getValeurAvant();
+        if (details != null) {
+            row.put("role", details.get("role"));
+            row.put("project", details.get("project"));
+            row.put("cible", details.get("cible"));
+        }
+        return row;
+    }
+
+    public record ProjectAccess(Long projectId, Long roleId) {}
 }

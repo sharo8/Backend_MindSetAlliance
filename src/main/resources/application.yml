@@ -117,6 +117,12 @@ ma:
     from-name: "Mindset Alliance — MA Workspace"
     frontend-base-url: ${MAIL_FRONTEND_BASE_URL:http://localhost:5173}
     welcome-on-startup: true
+  # Même source que MAIL_SMTP_* : ma-core-backend/.env via spring-dotenv + LocalEnvFile.
+  groq:
+    api-key: ${GROQ_API_KEY:}
+    base-url: ${GROQ_BASE_URL:https://api.groq.com/openai/v1}
+    model: ${GROQ_MODEL:openai/gpt-oss-120b}
+    timeout-seconds: 25
   tickets:
     reouverture-jours: 30
     critique-heures: 2

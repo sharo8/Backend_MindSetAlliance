@@ -3,6 +3,8 @@ package com.mindsetalliance.core.common.security;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.util.Collection;
 import java.util.List;
@@ -26,6 +28,18 @@ public final class JwtRoles {
     public static Long agentId() {
         String sub = currentJwt().getSubject();
         return Long.parseLong(sub.replace("agent-id-", ""));
+    }
+
+    /** Code société du header X-MA-Project, ou null pour ENTREPRISE / absence. */
+    public static String requestProjectCode() {
+        var attrs = RequestContextHolder.getRequestAttributes();
+        if (attrs instanceof ServletRequestAttributes sra) {
+            String header = sra.getRequest().getHeader("X-MA-Project");
+            if (header != null && !header.isBlank() && !"ENTREPRISE".equalsIgnoreCase(header.trim())) {
+                return header.trim();
+            }
+        }
+        return null;
     }
 
     @SuppressWarnings("unchecked")

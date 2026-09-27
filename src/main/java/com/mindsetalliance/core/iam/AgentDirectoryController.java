@@ -4,6 +4,7 @@ import com.mindsetalliance.core.common.security.RequirePermissions;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.validation.annotation.Validated;
@@ -30,7 +31,7 @@ public class AgentDirectoryController {
         this.service = service;
     }
 
-    @RequirePermissions({"MANAGE_USERS"})
+    @RequirePermissions(value = {"MANAGE_USERS"}, action = "VIEW")
     @GetMapping
     public Page<Map<String, Object>> list(@RequestParam(required = false) String q,
                                           @RequestParam(required = false) Long departementId,
@@ -39,26 +40,26 @@ public class AgentDirectoryController {
         return service.list(q, departementId, statut, pageable);
     }
 
-    @RequirePermissions({"MANAGE_USERS"})
+    @RequirePermissions(value = {"MANAGE_USERS"}, action = "CREATE")
     @PostMapping
     public Map<String, Object> create(@RequestBody @Valid CreateBody body) {
         return service.create(new AgentDirectoryService.CreateRequest(
-                body.nom(), body.prenom(), body.emailPro(), body.telephone(), body.departementId(), body.roles()));
+                body.nom(), body.prenom(), body.emailPro(), body.telephone(), body.departementId(), body.roles(), body.photo()));
     }
 
-    @RequirePermissions({"MANAGE_USERS"})
+    @RequirePermissions(value = {"MANAGE_USERS"}, action = "VIEW")
     @GetMapping("/{id:\\d+}")
     public Map<String, Object> get(@PathVariable Long id) {
         return service.get(id);
     }
 
-    @RequirePermissions({"MANAGE_USERS"})
+    @RequirePermissions(value = {"MANAGE_USERS"}, action = "UPDATE")
     @PatchMapping("/{id:\\d+}")
     public Map<String, Object> update(@PathVariable Long id, @RequestBody AgentDirectoryService.UpdateRequest body) {
         return service.update(id, body);
     }
 
-    @RequirePermissions({"MANAGE_USERS"})
+    @RequirePermissions(value = {"MANAGE_USERS"}, action = "UPDATE")
     @PatchMapping("/{id:\\d+}/status")
     public Map<String, Object> status(@PathVariable Long id, @RequestBody Map<String, String> body) {
         String statut = body == null ? null : body.get("statut");
@@ -68,24 +69,31 @@ public class AgentDirectoryController {
         return service.changeStatus(id, statut);
     }
 
-    @RequirePermissions({"MANAGE_USERS"})
+    @RequirePermissions(value = {"MANAGE_USERS"}, action = "DELETE")
     @PostMapping("/{id:\\d+}/desactiver")
     public Map<String, Object> desactiver(@PathVariable Long id, @RequestBody(required = false) Map<String, String> body) {
         return service.desactiver(id, body == null ? null : body.get("motif"));
     }
 
-    @RequirePermissions({"MANAGE_USERS"})
+    @RequirePermissions(value = {"MANAGE_USERS"}, action = "DELETE")
+    @PostMapping("/{id:\\d+}/supprimer")
+    public Map<String, Object> supprimer(@PathVariable Long id, @RequestBody(required = false) Map<String, String> body) {
+        return service.supprimer(id, body == null ? null : body.get("motif"));
+    }
+
+    @RequirePermissions(value = {"MANAGE_USERS"}, action = "UPDATE")
     @PostMapping("/{id:\\d+}/reactiver")
     public Map<String, Object> reactiver(@PathVariable Long id) {
         return service.reactiver(id);
     }
 
-    @RequirePermissions({"MANAGE_USERS"})
+    @RequirePermissions(value = {"MANAGE_USERS"}, action = "VIEW")
     @GetMapping("/departements")
     public List<Map<String, Object>> departements() {
         return service.listDepartements();
     }
 
     public record CreateBody(@NotBlank String nom, @NotBlank String prenom, @Email @NotBlank String emailPro,
-                             String telephone, Long departementId, List<AgentDirectoryService.RoleAssign> roles) {}
+                             String telephone, @NotNull Long departementId, List<AgentDirectoryService.RoleAssign> roles,
+                             String photo) {}
 }

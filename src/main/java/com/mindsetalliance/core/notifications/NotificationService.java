@@ -3,10 +3,12 @@ package com.mindsetalliance.core.notifications;
 import com.mindsetalliance.core.iam.Agent;
 import com.mindsetalliance.core.iam.AgentRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
 @Service
+@Transactional
 public class NotificationService {
     private final NotificationRepository repository;
     private final AgentRepository agentRepository;
@@ -26,6 +28,15 @@ public class NotificationService {
         n.setCanal(canal);
         n.setTitre(titre);
         n.setMessage(message);
+        return repository.save(n);
+    }
+
+    public Notification markRead(Long agentId, Long notificationId) {
+        Notification n = repository.findById(notificationId).orElse(null);
+        if (n == null || n.getAgent() == null || !n.getAgent().getId().equals(agentId)) {
+            return null;
+        }
+        n.setLu(true);
         return repository.save(n);
     }
 
