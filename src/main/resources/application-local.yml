@@ -4,7 +4,7 @@
 spring:
   datasource:
     username: ${DATABASE_USERNAME:root}
-    password: ${DATABASE_PASSWORD:sharO123}
+    password: ${DATABASE_PASSWORD}
   autoconfigure:
     exclude:
       - org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
