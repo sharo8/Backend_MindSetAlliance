@@ -32,7 +32,7 @@ class ProjectEventListenerContractTest {
 
     @BeforeEach
     void setUp() {
-        listener = new ProjectEventListener(kpiRepository, projectRepository, ticketService);
+        listener = new ProjectEventListener(new ProjectEventProcessor(kpiRepository, projectRepository, ticketService));
         cnn = new Project();
         cnn.setCode("CNN");
     }

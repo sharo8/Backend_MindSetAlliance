@@ -104,7 +104,9 @@ public class SecurityConfig {
                             "/api/auth/refresh",
                             "/api/auth/password-setup",
                             "/api/auth/password-reset",
-                            "/api/auth/.well-known/jwks.json"
+                            "/api/auth/.well-known/jwks.json",
+                            // Protégé par X-MA-Internal-Key (InternalKeyFilter), pas par un jeton d'agent.
+                            "/api/auth/revocations"
                     ).permitAll();
                     if (swagger) {
                         auth.requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll();
@@ -123,6 +125,7 @@ public class SecurityConfig {
                                     || path.startsWith("/api/auth/2fa")
                                     || path.startsWith("/api/auth/password-reset")
                                     || path.startsWith("/api/auth/password-setup")
+                                    || path.startsWith("/api/auth/revocations")
                                     || path.startsWith("/api/internal/")
                                     || path.contains("/.well-known/jwks.json")) {
                                 return null;

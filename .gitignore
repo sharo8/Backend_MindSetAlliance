@@ -2,3 +2,6 @@
 .env.local
 application-secrets.yml
 target/
+
+# Clé privée JWT : jamais dans Git (utiliser MA_AUTH_RSA_JWK en production)
+data/

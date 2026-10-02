@@ -1,5 +1,9 @@
 server:
   port: ${SERVER_PORT:8081}
+  compression:
+    enabled: true
+    mime-types: application/json
+    min-response-size: 2048
 
 spring:
   application:
@@ -9,7 +13,7 @@ spring:
   datasource:
     url: ${DATABASE_URL:jdbc:mysql://localhost:3308/mindsetalliance_core?createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=Africa/Kinshasa&tinyInt1isBit=false}
     username: ${DATABASE_USERNAME:root}
-    password: ${DATABASE_PASSWORD:sharO123}
+    password: ${DATABASE_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       data-source-properties:
@@ -110,6 +114,22 @@ ma:
       coursiers: colisnanga.coursiers.events
       contenus: mdr.contenus.events
       tickets: core.tickets.events
+  integration:
+    cnn:
+      # Relais /api/cnn/** + maintien à chaud + rattrapage nocturne. Voir README « Intégration Colis na Nga ».
+      enabled: ${MA_CNN_ENABLED:false}
+      base-url: ${MA_CNN_BASE_URL:http://localhost:8080}
+      audience: colis-na-nga
+      service-token-seconds: 60
+      # Secret HMAC partagé avec Colis na Nga (≥ 32 caractères). Sans lui, /api/internal/cnn/events refuse tout.
+      webhook-secret: ${MA_CNN_WEBHOOK_SECRET:}
+      webhook-tolerance-seconds: 300
+      cache-seconds: ${MA_CNN_CACHE_SECONDS:10}
+      connect-timeout-ms: 3000
+      read-timeout-ms: 20000
+      keep-warm: ${MA_CNN_KEEP_WARM:true}
+      keep-warm-minutes: 10
+      reconcile-cron: "0 15 3 * * *"
   errors:
     expose-details: false
   mail:
