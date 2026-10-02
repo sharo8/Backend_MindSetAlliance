@@ -37,5 +37,6 @@ public class Notification {
     public String getMessage() { return message; }
     public void setMessage(String message) { this.message = message; }
     public boolean isLu() { return lu; }
+    public void setLu(boolean lu) { this.lu = lu; }
     public Instant getCreatedAt() { return createdAt; }
 }

@@ -9,4 +9,7 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface RequirePermissions {
     String[] value();
+
+    /** VIEW / CREATE / UPDATE / DELETE — vide = permission globale (4 actions si décomposable). */
+    String action() default "";
 }

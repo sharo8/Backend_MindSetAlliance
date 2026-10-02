@@ -513,6 +513,7 @@ public class TicketService {
     @Transactional(readOnly = true)
     public List<Map<String, Object>> listDepartements() {
         return departementRepository.findAll().stream()
+                .filter(dep -> !"INACTIF".equals(dep.getStatut()))
                 .map(dep -> {
                     Map<String, Object> row = new LinkedHashMap<>();
                     row.put("id", dep.getId());
@@ -538,6 +539,7 @@ public class TicketService {
                         row.put("departementId", agent.getDepartement().getId());
                         row.put("departementNom", agent.getDepartement().getNom());
                     }
+                    row.put("hasPhoto", agent.isHasPhoto());
                     return row;
                 })
                 .toList();

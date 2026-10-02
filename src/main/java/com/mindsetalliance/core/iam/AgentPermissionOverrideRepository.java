@@ -13,6 +13,15 @@ public interface AgentPermissionOverrideRepository extends JpaRepository<AgentPe
     Optional<AgentPermissionOverride> findByIdAndAgentId(Long id, Long agentId);
 
     @Query("""
+            select distinct o from AgentPermissionOverride o
+            join fetch o.agent
+            join fetch o.permission
+            left join fetch o.project
+            left join fetch o.accordePar
+            """)
+    List<AgentPermissionOverride> findAllWithGraph();
+
+    @Query("""
             select o from AgentPermissionOverride o
             where o.agent.id = :agentId and o.permission.id = :permissionId
               and ((:projectId is null and o.project is null) or o.project.id = :projectId)

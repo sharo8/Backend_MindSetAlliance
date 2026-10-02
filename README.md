@@ -139,7 +139,7 @@ X-CNN-Signature:   sha256=<hex HMAC-SHA256(MA_CNN_WEBHOOK_SECRET, timestamp + ".
 |---|---|
 | Authenticité / intégrité | HMAC-SHA256 du corps brut + clé interne |
 | Anti-rejeu | horodatage signé à ±5 min de l'heure du Core |
-| Exactement une fois | `eventId` mémorisé dans `integration_inbox` (migration V15) dans la même transaction que la mise à jour des KPI |
+| Exactement une fois | `eventId` mémorisé dans `integration_inbox` (migration V20) dans la même transaction que la mise à jour des KPI |
 | Pas de perte | CNN écrit l'événement dans sa table `integration_outbox` dans la même transaction que le fait métier, et le renvoie tant qu'il n'est pas dans `accepted` ou `duplicates` |
 | Cloisonnement | `projectCode` forcé à `CNN` : ce canal ne peut pas modifier les KPI d'un autre projet |
 

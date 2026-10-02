@@ -7,7 +7,9 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,10 +32,16 @@ public class AccessAdminController {
 
     private final AccessAdminService service;
     private final AgentDirectoryService directoryService;
+    private final DepartementAdminService departementAdminService;
+    private final PermissionActionService permissionActionService;
 
-    public AccessAdminController(AccessAdminService service, AgentDirectoryService directoryService) {
+    public AccessAdminController(AccessAdminService service, AgentDirectoryService directoryService,
+                                 DepartementAdminService departementAdminService,
+                                 PermissionActionService permissionActionService) {
         this.service = service;
         this.directoryService = directoryService;
+        this.departementAdminService = departementAdminService;
+        this.permissionActionService = permissionActionService;
     }
 
     @RequirePermissions({"MANAGE_USERS", "MANAGE_ACCESS"})
@@ -43,10 +51,34 @@ public class AccessAdminController {
                                             @RequestParam(required = false) Long departement,
                                             @RequestParam(required = false) Long departementId,
                                             @RequestParam(required = false) String statut,
+                                            @RequestParam(required = false) String role,
+                                            @RequestParam(required = false) String scope,
                                             Pageable pageable) {
         String query = search != null && !search.isBlank() ? search : q;
         Long dep = departement != null ? departement : departementId;
-        return directoryService.list(query, dep, statut, pageable);
+        if (pageable.getSort().isUnsorted()) {
+            pageable = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
+                    Sort.by(Sort.Direction.DESC, "createdAt"));
+        }
+        return directoryService.list(query, dep, statut, role, scope, pageable);
+    }
+
+    @RequirePermissions({"MANAGE_USERS", "MANAGE_ACCESS"})
+    @GetMapping("/access-stats")
+    public Map<String, Object> accessStats() {
+        return service.accessStats();
+    }
+
+    @RequirePermissions({"MANAGE_USERS", "MANAGE_ACCESS"})
+    @GetMapping("/agents/{id}/access-history")
+    public List<Map<String, Object>> accessHistory(@PathVariable Long id) {
+        return service.accessHistory(id);
+    }
+
+    @RequirePermissions({"MANAGE_USERS", "MANAGE_ACCESS"})
+    @PutMapping("/agents/{id}/access")
+    public Map<String, Object> syncAccess(@PathVariable Long id, @RequestBody AccessSyncBody body) {
+        return service.syncAccess(id, body.companyRoleId(), body.projects() == null ? List.of() : body.projects());
     }
 
     @RequirePermissions({"MANAGE_USERS", "MANAGE_ACCESS"})
@@ -56,28 +88,46 @@ public class AccessAdminController {
     }
 
     @RequirePermissions({"MANAGE_USERS", "MANAGE_ACCESS"})
+    @GetMapping("/agents/{id}/permissions-effectives")
+    public List<String> permissionsEffectives(@PathVariable Long id, @RequestParam(required = false) String projectCode) {
+        return directoryService.permissionsEffectives(id, projectCode);
+    }
+
+    @RequirePermissions(value = {"MANAGE_USERS"}, action = "CREATE")
     @PostMapping("/agents")
     public Map<String, Object> createAgent(@RequestBody @Valid CreateAgentBody body) {
         return directoryService.create(new AgentDirectoryService.CreateRequest(
-                body.nom(), body.prenom(), body.emailPro(), body.telephone(), body.departementId(), body.roles()));
+                body.nom(), body.prenom(), body.emailPro(), body.telephone(), body.departementId(), body.roles(), body.photo()));
     }
 
-    @RequirePermissions({"MANAGE_USERS", "MANAGE_ACCESS"})
+    @RequirePermissions(value = {"MANAGE_USERS"}, action = "UPDATE")
     @PatchMapping("/agents/{id}")
     public Map<String, Object> patchAgent(@PathVariable Long id, @RequestBody AgentDirectoryService.UpdateRequest body) {
         return directoryService.update(id, body);
     }
 
-    @RequirePermissions({"MANAGE_USERS", "MANAGE_ACCESS"})
+    @RequirePermissions(value = {"MANAGE_USERS"}, action = "DELETE")
     @PostMapping("/agents/{id}/desactiver")
     public Map<String, Object> desactiver(@PathVariable Long id, @RequestBody(required = false) Map<String, String> body) {
         return directoryService.desactiver(id, body == null ? null : body.get("motif"));
     }
 
-    @RequirePermissions({"MANAGE_USERS", "MANAGE_ACCESS"})
+    @RequirePermissions(value = {"MANAGE_USERS"}, action = "DELETE")
+    @PostMapping("/agents/{id}/supprimer")
+    public Map<String, Object> supprimer(@PathVariable Long id, @RequestBody(required = false) Map<String, String> body) {
+        return directoryService.supprimer(id, body == null ? null : body.get("motif"));
+    }
+
+    @RequirePermissions(value = {"MANAGE_USERS"}, action = "UPDATE")
     @PostMapping("/agents/{id}/reactiver")
     public Map<String, Object> reactiver(@PathVariable Long id) {
         return directoryService.reactiver(id);
+    }
+
+    @RequirePermissions({"MANAGE_USERS", "MANAGE_ACCESS"})
+    @PutMapping("/agents/{id}/permission-actions")
+    public Map<String, Object> replaceActions(@PathVariable Long id, @RequestBody PermissionActionsBody body) {
+        return permissionActionService.replace(id, body.permissionId(), body.projectId(), body.actions());
     }
 
     @RequirePermissions({"MANAGE_USERS", "MANAGE_ACCESS"})
@@ -113,7 +163,25 @@ public class AccessAdminController {
     @RequirePermissions({"MANAGE_USERS", "MANAGE_ACCESS"})
     @GetMapping("/departements")
     public List<Map<String, Object>> departements() {
-        return directoryService.listDepartements();
+        return departementAdminService.list();
+    }
+
+    @RequireRoles({"ADMIN_SYSTEME", "DIRECTION"})
+    @PostMapping("/departements")
+    public Map<String, Object> createDepartement(@RequestBody DepartementBody body) {
+        return departementAdminService.create(body.nom(), body.description(), body.roles());
+    }
+
+    @RequireRoles({"ADMIN_SYSTEME", "DIRECTION"})
+    @PutMapping("/departements/{id}")
+    public Map<String, Object> updateDepartement(@PathVariable Long id, @RequestBody DepartementBody body) {
+        return departementAdminService.update(id, body.nom(), body.description(), body.roles(), body.statut());
+    }
+
+    @RequireRoles({"ADMIN_SYSTEME", "DIRECTION"})
+    @PostMapping("/departements/{id}/desactiver")
+    public Map<String, Object> deactivateDepartement(@PathVariable Long id) {
+        return departementAdminService.desactiver(id);
     }
 
     @RequirePermissions({"MANAGE_USERS", "MANAGE_ACCESS"})
@@ -153,8 +221,12 @@ public class AccessAdminController {
     }
 
     public record AssignBody(@NotNull Long roleId, Long projectId) {}
+    public record AccessSyncBody(Long companyRoleId, List<AccessAdminService.ProjectAccess> projects) {}
     public record SocieteBody(String nom, String code, String villeReference, String statut) {}
     public record CreateAgentBody(@NotBlank String nom, @NotBlank String prenom, @Email @NotBlank String emailPro,
-                                  String telephone, Long departementId, List<AgentDirectoryService.RoleAssign> roles) {}
-    public record OverrideBody(@NotNull Long permissionId, Long projectId, @NotBlank String type, @NotBlank String motif) {}
+                                  String telephone, @NotNull Long departementId,
+                                  List<AgentDirectoryService.RoleAssign> roles, String photo) {}
+    public record DepartementBody(String nom, String description, List<String> roles, String statut) {}
+    public record OverrideBody(@NotNull Long permissionId, Long projectId, @NotBlank String type, String motif) {}
+    public record PermissionActionsBody(@NotNull Long permissionId, Long projectId, Map<String, Boolean> actions) {}
 }

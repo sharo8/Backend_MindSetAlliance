@@ -62,7 +62,7 @@ public class SecurityConfig {
             config.setAllowedOrigins(originList);
         }
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-MA-Internal-Key"));
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-MA-Internal-Key", "X-MA-Project"));
         config.setAllowCredentials(true);
         config.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
