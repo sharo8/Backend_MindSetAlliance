@@ -13,6 +13,7 @@ import com.mindsetalliance.core.common.BusinessException;
 import com.mindsetalliance.core.common.security.JwtRoles;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -33,9 +34,15 @@ public class AssistantChatService {
             Quote the numbers returned by the tools. Never mention the technical names of the tools.
             Tool results use French field names and values (e.g. actifs, connexions, quand, acteur, ENTREPRISE):
             translate them into the reply language, never copy French words into a non-French reply.
-            Data cards and tables are rendered automatically under your reply, already translated:
-            never repeat their rows as a markdown table or a bullet list; answer in one to three sentences
-            with the key figures only (use **bold** for the main number or name).
+
+            CONCISENESS (critical):
+            Answer ONLY what was asked. For a count question (e.g. "how many inactive users?"), reply with
+            1 short sentence containing the figure in **bold**, and nothing else — no totals, no other KPIs,
+            no tables, no bullet lists of rows. Optionally add ONE short offer: "Would you like the list?"
+            Add extra stats, lists or comparisons ONLY when the user explicitly asks (list, detail, compare).
+            If the question is ambiguous, ask ONE short clarifying question instead of dumping data.
+            When structured cards/tables are shown under your reply, do not rebuild them as markdown;
+            never repeat their rows as a bullet list.
             """;
 
     private static final String LANGUAGE_RULE = """
@@ -45,6 +52,13 @@ public class AssistantChatService {
             Earlier messages of this conversation may use another language: ignore their language,
             only the latest message decides.
             Tables and cards returned by the tools are shown under your reply: do not list their rows.""";
+
+    private static final String INTENT_RULE = """
+            DETECTED INTENT: %1$s.
+            If INTENT is count: answer in at most 2 sentences with only the requested figure; do not mention other KPIs.
+            If INTENT is list or detail: you may summarise and structured cards/tables may appear under the reply.
+            If INTENT is summary: call get_system_summary and write a short 4–6 line overview from its numbers only.
+            If INTENT is other: stay brief; do not invent extra statistics.""";
 
     private final GroqChatClient groq;
     private final AssistantToolsService tools;
@@ -70,12 +84,31 @@ public class AssistantChatService {
     public ChatResponse chat(ChatRequest request) {
         traceQuestion(request.message());
         AssistantLanguage lang = AssistantLanguage.detect(request.message(), request.history());
+        AssistantIntent intent = AssistantIntent.detect(request.message());
+        // Résumé système : chiffres via requêtes de comptage, sans appeler Groq (évite LazyInit + latence).
+        if (intent == AssistantIntent.SUMMARY) {
+            try {
+                return persist(request, buildSystemSummaryResponse(lang, intent));
+            } catch (AccessDeniedException ex) {
+                log.warn("Assistant summary denied: {}", ex.getMessage());
+                return persist(request, reply(localized(lang,
+                                "Accès refusé pour le résumé système.",
+                                "Access denied for the system summary.",
+                                "Bokoti epekisami mpo na résumé système.",
+                                "Ufikiaji umekataliwa kwa muhtasari wa mfumo."),
+                        List.of(), false, null, lang, intent, List.of()));
+            } catch (Exception ex) {
+                log.error("Assistant summary failed", ex);
+                return persist(request, unavailable("internal", lang, intent));
+            }
+        }
         if (!properties.configured()) {
-            return persist(request, unavailable("missing_key", lang));
+            return persist(request, unavailable("missing_key", lang, intent));
         }
         try {
-            List<JsonNode> messages = seedMessages(request, lang);
+            List<JsonNode> messages = seedMessages(request, lang, intent);
             List<FactCard> facts = new ArrayList<>();
+            List<String> toolNames = new ArrayList<>();
             for (int round = 0; round < 4; round++) {
                 JsonNode completion = groq.complete(messages, toolCatalog());
                 JsonNode choice = completion.path("choices").path(0).path("message");
@@ -89,15 +122,18 @@ public class AssistantChatService {
                                 "Nakokaki kopesa eyano te. Tuna motuna na ndenge mosusu.",
                                 "Sikuweza kutoa jibu. Tafadhali uliza swali kwa njia nyingine.");
                     }
-                    return persist(request, new ChatResponse(
-                            withoutDuplicatedRows(answer, facts), facts, false, null, null, lang.code()));
+                    return persist(request, reply(
+                            withoutDuplicatedRows(answer, facts), facts, false, null, lang, intent, toolNames));
                 }
                 messages.add(choice);
                 for (JsonNode call : toolCalls) {
                     String name = call.path("function").path("name").asText();
+                    if (!name.isBlank() && !toolNames.contains(name)) {
+                        toolNames.add(name);
+                    }
                     JsonNode args = parseArgs(call.path("function").path("arguments").asText("{}"));
                     AssistantToolsService.ToolOutcome outcome = tools.execute(name, args);
-                    if (outcome.fact() != null) {
+                    if (outcome.fact() != null && intent.includeFact(outcome.fact().kind())) {
                         facts.add(AssistantLabels.render(outcome.fact(), lang));
                     }
                     ObjectNode toolMsg = mapper.createObjectNode();
@@ -107,7 +143,7 @@ public class AssistantChatService {
                     messages.add(toolMsg);
                 }
             }
-            return persist(request, new ChatResponse(
+            return persist(request, reply(
                     localized(lang,
                             "La question a nécessité trop d’étapes. Simplifiez-la.",
                             "The question required too many steps. Please simplify it.",
@@ -116,21 +152,102 @@ public class AssistantChatService {
                     facts,
                     false,
                     null,
-                    null,
-                    lang.code()
+                    lang,
+                    intent,
+                    toolNames
             ));
         } catch (GroqCallException ex) {
             log.warn("Assistant Groq {} HTTP {} {}", ex.reasonCode(), ex.httpStatus(), abbreviate(ex.groqBody()));
-            return persist(request, unavailable(ex.reasonCode(), lang));
+            return persist(request, unavailable(ex.reasonCode(), lang, intent));
         } catch (BusinessException ex) {
             if (ex.getStatus() == 503) {
-                return persist(request, unavailable("network", lang));
+                return persist(request, unavailable("network", lang, intent));
             }
             throw ex;
         } catch (Exception ex) {
-            log.warn("Assistant: {}", ex.getMessage());
-            return persist(request, unavailable("internal", lang));
+            log.error("Assistant unexpected failure", ex);
+            return persist(request, unavailable("internal", lang, intent));
         }
+    }
+
+    private ChatResponse buildSystemSummaryResponse(AssistantLanguage lang, AssistantIntent intent) {
+        AssistantToolsService.ToolOutcome outcome = tools.execute("get_system_summary", mapper.createObjectNode());
+        if (outcome.payload().containsKey("error")) {
+            throw new BusinessException(String.valueOf(outcome.payload().get("error")), 403);
+        }
+        List<FactCard> facts = new ArrayList<>();
+        if (outcome.fact() != null && intent.includeFact(outcome.fact().kind())) {
+            facts.add(AssistantLabels.render(outcome.fact(), lang));
+        }
+        return reply(formatSystemSummary(outcome.payload(), lang), facts, false, null, lang, intent, List.of("get_system_summary"));
+    }
+
+    static String formatSystemSummary(Map<String, Object> data, AssistantLanguage lang) {
+        long total = asLong(data.get("utilisateursTotal"));
+        long actifs = asLong(data.get("utilisateursActifs"));
+        long inactifs = asLong(data.get("utilisateursInactifs"));
+        long open = asLong(data.get("ticketsOuverts"));
+        long notifs = asLong(data.get("notificationsNonLues"));
+        long deps = asLong(data.get("departements"));
+        Map<String, Long> byPriority = new LinkedHashMap<>();
+        Object rawPriorities = data.get("ticketsOuvertsParPriorite");
+        if (rawPriorities instanceof Map<?, ?> raw) {
+            raw.forEach((k, v) -> byPriority.put(
+                    k == null ? "?" : String.valueOf(k),
+                    v instanceof Number n ? n.longValue() : 0L));
+        }
+        String priorities = byPriority.isEmpty()
+                ? "—"
+                : byPriority.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .map(e -> priorityLabel(e.getKey(), lang) + " " + e.getValue())
+                .reduce((a, b) -> a + ", " + b)
+                .orElse("—");
+        return switch (lang) {
+            case EN -> """
+                    System overview:
+                    - Users: **%d** total (**%d** active, **%d** inactive)
+                    - Open tickets: **%d** (%s)
+                    - Unread notifications: **%d**
+                    - Departments: **%d**""".formatted(total, actifs, inactifs, open, priorities, notifs, deps);
+            case LN -> """
+                    Résumé ya système:
+                    - Basali: **%d** nyonso (**%d** actifs, **%d** inactifs)
+                    - Ba tickets oyo eza kofungwama: **%d** (%s)
+                    - Ba notifications oyo otangi te: **%d**
+                    - Ba départements: **%d**""".formatted(total, actifs, inactifs, open, priorities, notifs, deps);
+            case SW -> """
+                    Muhtasari wa mfumo:
+                    - Watumiaji: **%d** jumla (**%d** hai, **%d** wasio hai)
+                    - Tiketi zilizo wazi: **%d** (%s)
+                    - Arifa ambazo hazijasomwa: **%d**
+                    - Idara: **%d**""".formatted(total, actifs, inactifs, open, priorities, notifs, deps);
+            default -> """
+                    Résumé du système :
+                    - Utilisateurs : **%d** au total (**%d** actifs, **%d** inactifs)
+                    - Tickets ouverts : **%d** (%s)
+                    - Notifications non lues : **%d**
+                    - Départements : **%d**""".formatted(total, actifs, inactifs, open, priorities, notifs, deps);
+        };
+    }
+
+    private static String priorityLabel(String raw, AssistantLanguage lang) {
+        String key = raw == null ? "" : raw.toUpperCase(Locale.ROOT);
+        return switch (key) {
+            case "CRITIQUE", "HIGH" -> lang == AssistantLanguage.EN ? "Critical" : "Critique";
+            case "ELEVEE", "MEDIUM" -> lang == AssistantLanguage.EN ? "High" : "Élevée";
+            case "FAIBLE", "LOW" -> lang == AssistantLanguage.EN ? "Low" : "Faible";
+            case "NORMALE", "NORMAL" -> lang == AssistantLanguage.EN ? "Normal" : "Normale";
+            case "?", "" -> "—";
+            default -> raw;
+        };
+    }
+
+    private static long asLong(Object value) {
+        if (value instanceof Number n) {
+            return n.longValue();
+        }
+        return 0L;
     }
 
     /**
@@ -169,6 +286,12 @@ public class AssistantChatService {
         return cleaned.isBlank() ? answer : cleaned;
     }
 
+    private static ChatResponse reply(String answer, List<FactCard> facts, boolean unavailable, String reason,
+                                      AssistantLanguage lang, AssistantIntent intent, List<String> tools) {
+        return new ChatResponse(answer, facts, unavailable, reason, null, lang.code(), intent.code(),
+                tools == null ? List.of() : List.copyOf(tools), null);
+    }
+
     private static String localized(AssistantLanguage lang, String fr, String en, String ln, String sw) {
         return switch (lang) {
             case EN -> en;
@@ -178,14 +301,14 @@ public class AssistantChatService {
         };
     }
 
-    private static ChatResponse unavailable(String reason, AssistantLanguage lang) {
+    private static ChatResponse unavailable(String reason, AssistantLanguage lang, AssistantIntent intent) {
         String answer = switch (reason) {
             case "missing_key" -> "Assistant IA non configuré — contactez l’administrateur système.";
             case "invalid_key" -> "Clé API Groq invalide — vérifiez GROQ_API_KEY.";
             case "rate_limited", "network", "groq_error" -> "Erreur temporaire, réessayez dans quelques instants.";
             default -> "Erreur temporaire, réessayez dans quelques instants.";
         };
-        return new ChatResponse(answer, List.of(), true, reason, null, lang.code());
+        return reply(answer, List.of(), true, reason, lang, intent, List.of());
     }
 
     private static String abbreviate(String body) {
@@ -198,14 +321,15 @@ public class AssistantChatService {
 
     private ChatResponse persist(ChatRequest request, ChatResponse response) {
         try {
-            Long id = conversations.appendTurn(
+            AssistantConversationService.AppendResult stored = conversations.appendTurn(
                     request.conversationId(),
                     request.message(),
                     response.answer(),
                     response.facts(),
-                    response.unavailable()
+                    response.unavailable(),
+                    response.tools()
             );
-            return response.withConversation(id);
+            return response.withStored(stored.conversationId(), stored.messageId());
         } catch (Exception ex) {
             log.warn("Historique assistant: {}", ex.getMessage());
             return response;
@@ -227,12 +351,13 @@ public class AssistantChatService {
         }
     }
 
-    private List<JsonNode> seedMessages(ChatRequest request, AssistantLanguage lang) {
+    private List<JsonNode> seedMessages(ChatRequest request, AssistantLanguage lang, AssistantIntent intent) {
         List<JsonNode> messages = new ArrayList<>();
         String languageRule = LANGUAGE_RULE.formatted(lang.promptName());
+        String intentRule = INTENT_RULE.formatted(intent.code());
         ObjectNode system = mapper.createObjectNode();
         system.put("role", "system");
-        system.put("content", SYSTEM + "\n" + languageRule);
+        system.put("content", SYSTEM + "\n" + languageRule + "\n" + intentRule);
         messages.add(system);
         List<ChatTurn> history = request.history() == null ? List.of() : request.history();
         int from = Math.max(0, history.size() - 6);
@@ -253,7 +378,7 @@ public class AssistantChatService {
         // Rappel placé après l'historique : sinon le modèle suit la langue des tours précédents.
         ObjectNode reminder = mapper.createObjectNode();
         reminder.put("role", "system");
-        reminder.put("content", languageRule);
+        reminder.put("content", languageRule + "\n" + intentRule);
         messages.add(reminder);
         ObjectNode user = mapper.createObjectNode();
         user.put("role", "user");
@@ -301,6 +426,9 @@ public class AssistantChatService {
                 Map.of("projet", Map.of("type", "string", "description", "Code projet optionnel"))));
         tools.add(fn("get_cnn_status",
                 "État d'intégration Colis na Nga + KPI démo Core + tickets CNN.",
+                Map.of()));
+        tools.add(fn("get_system_summary",
+                "Résumé système : utilisateurs (total/actifs/inactifs), tickets ouverts par priorité, notifications non lues, départements. À utiliser pour summary / résumé / overview.",
                 Map.of()));
         return tools;
     }

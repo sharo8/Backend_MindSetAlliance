@@ -1,6 +1,7 @@
 package com.mindsetalliance.core;
 
 import com.mindsetalliance.core.assistant.AssistantProperties;
+import com.mindsetalliance.core.cnn.CnnProperties;
 import com.mindsetalliance.core.config.LocalEnvFile;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -11,7 +12,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @SpringBootApplication
 @EnableScheduling
 @EnableAspectJAutoProxy
-@EnableConfigurationProperties(AssistantProperties.class)
+@EnableConfigurationProperties({AssistantProperties.class, CnnProperties.class})
 public class CoreApplication {
 
     public static void main(String[] args) {

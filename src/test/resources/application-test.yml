@@ -6,6 +6,8 @@ spring:
     listener:
       auto-startup: false
 ma:
+  cnn:
+    mode: off
   kafka:
     enabled: false
   flyway:

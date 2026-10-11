@@ -4,12 +4,16 @@ import com.mindsetalliance.core.assistant.AssistantDtos.ChatRequest;
 import com.mindsetalliance.core.assistant.AssistantDtos.ChatResponse;
 import com.mindsetalliance.core.assistant.AssistantDtos.ConversationDetail;
 import com.mindsetalliance.core.assistant.AssistantDtos.ConversationPage;
+import com.mindsetalliance.core.assistant.AssistantDtos.ConversationSummary;
+import com.mindsetalliance.core.assistant.AssistantDtos.FeedbackRequest;
+import com.mindsetalliance.core.assistant.AssistantDtos.RenameRequest;
 import com.mindsetalliance.core.assistant.AssistantDtos.StatusResponse;
 import com.mindsetalliance.core.common.security.RequireRoles;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -60,6 +64,19 @@ public class AssistantController {
     @GetMapping("/conversations/{id}")
     public ConversationDetail conversation(@PathVariable Long id) {
         return conversationService.getOwn(id);
+    }
+
+    @RequireRoles({"ADMIN_SYSTEME", "DIRECTION"})
+    @PatchMapping("/conversations/{id}")
+    public ConversationSummary rename(@PathVariable Long id, @Valid @RequestBody RenameRequest request) {
+        return conversationService.renameOwn(id, request.title());
+    }
+
+    @RequireRoles({"ADMIN_SYSTEME", "DIRECTION"})
+    @PostMapping("/conversations/{id}/feedback")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void feedback(@PathVariable Long id, @Valid @RequestBody FeedbackRequest request) {
+        conversationService.feedbackOwn(id, request.messageId(), request.value());
     }
 
     @RequireRoles({"ADMIN_SYSTEME", "DIRECTION"})

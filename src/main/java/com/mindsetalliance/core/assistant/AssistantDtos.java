@@ -1,5 +1,6 @@
 package com.mindsetalliance.core.assistant;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
@@ -19,7 +20,7 @@ public final class AssistantDtos {
     }
 
     public record ChatRequest(
-            @NotBlank @Size(max = 2000) String message,
+            @NotBlank @Size(max = 4000) String message,
             List<ChatTurn> history,
             Long conversationId
     ) {
@@ -45,10 +46,16 @@ public final class AssistantDtos {
             boolean unavailable,
             String unavailableReason,
             Long conversationId,
-            String language
+            String language,
+            /** count | list | detail | other — les cartes ne s'affichent que pour list/detail (et tables pour other). */
+            String intent,
+            /** Noms techniques des outils réellement appelés. Vide si aucun. */
+            List<String> tools,
+            /** Identifiant du message assistant enregistré, pour le retour pouce. */
+            String messageId
     ) {
-        public ChatResponse withConversation(Long id) {
-            return new ChatResponse(answer, facts, unavailable, unavailableReason, id, language);
+        public ChatResponse withStored(Long id, String storedMessageId) {
+            return new ChatResponse(answer, facts, unavailable, unavailableReason, id, language, intent, tools, storedMessageId);
         }
     }
 
@@ -61,14 +68,24 @@ public final class AssistantDtos {
         }
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record StoredMessage(
             String id,
             String role,
             String content,
             Instant at,
             List<FactCard> facts,
-            boolean unavailable
+            boolean unavailable,
+            List<String> tools,
+            /** up, down, ou absent. */
+            String feedback
     ) {
+    }
+
+    public record RenameRequest(@NotBlank @Size(max = 180) String title) {
+    }
+
+    public record FeedbackRequest(@NotBlank @Size(max = 40) String messageId, @Size(max = 8) String value) {
     }
 
     public record ConversationSummary(Long id, String title, Instant createdAt, Instant lastActivityAt) {

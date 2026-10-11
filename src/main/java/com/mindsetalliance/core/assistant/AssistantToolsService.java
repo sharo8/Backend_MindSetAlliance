@@ -10,12 +10,13 @@ import com.mindsetalliance.core.iam.AgentPermissionOverrideRepository;
 import com.mindsetalliance.core.iam.AgentRepository;
 import com.mindsetalliance.core.iam.AgentRole;
 import com.mindsetalliance.core.iam.AgentRoleRepository;
+import com.mindsetalliance.core.iam.DepartementRepository;
 import com.mindsetalliance.core.iam.EffectivePermissionService;
 import com.mindsetalliance.core.iam.Permission;
 import com.mindsetalliance.core.iam.Role;
 import com.mindsetalliance.core.iam.RoleRepository;
+import com.mindsetalliance.core.notifications.NotificationRepository;
 import com.mindsetalliance.core.ops.OpsService;
-import com.mindsetalliance.core.tickets.Ticket;
 import com.mindsetalliance.core.tickets.TicketRepository;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.security.access.AccessDeniedException;
@@ -49,6 +50,8 @@ public class AssistantToolsService {
     private final AgentPermissionOverrideRepository overrideRepository;
     private final AuditLogRepository auditLogRepository;
     private final TicketRepository ticketRepository;
+    private final DepartementRepository departementRepository;
+    private final NotificationRepository notificationRepository;
     private final OpsService opsService;
     private final EffectivePermissionService effectivePermissionService;
 
@@ -58,6 +61,8 @@ public class AssistantToolsService {
                                  AgentPermissionOverrideRepository overrideRepository,
                                  AuditLogRepository auditLogRepository,
                                  TicketRepository ticketRepository,
+                                 DepartementRepository departementRepository,
+                                 NotificationRepository notificationRepository,
                                  OpsService opsService,
                                  EffectivePermissionService effectivePermissionService) {
         this.agentRepository = agentRepository;
@@ -66,6 +71,8 @@ public class AssistantToolsService {
         this.overrideRepository = overrideRepository;
         this.auditLogRepository = auditLogRepository;
         this.ticketRepository = ticketRepository;
+        this.departementRepository = departementRepository;
+        this.notificationRepository = notificationRepository;
         this.opsService = opsService;
         this.effectivePermissionService = effectivePermissionService;
     }
@@ -81,6 +88,11 @@ public class AssistantToolsService {
     public record ToolOutcome(Map<String, Object> payload, FactDraft fact) {
     }
 
+    /**
+     * Point d'entrée unique : une transaction couvre tout l'outil (évite LazyInitializationException
+     * quand open-in-view=false et que execute() s'auto-appelle sans proxy Spring).
+     */
+    @Transactional(readOnly = true)
     public ToolOutcome execute(String name, JsonNode args) {
         return switch (name) {
             case "get_user_count" -> getUserCount(text(args, "statut"), text(args, "role"));
@@ -92,6 +104,7 @@ public class AssistantToolsService {
             case "get_today_audit" -> getTodayAudit(intArg(args, "limit", 12));
             case "get_ticket_stats" -> getTicketStats(text(args, "projet"));
             case "get_cnn_status" -> getCnnStatus();
+            case "get_system_summary" -> getSystemSummary();
             default -> new ToolOutcome(Map.of("error", "unknown_tool", "name", name), null);
         };
     }
@@ -134,12 +147,26 @@ public class AssistantToolsService {
         payload.put("filtreRole", wantedRole);
         payload.put("resultatFiltre", matching);
         payload.put("parRole", byRole);
-        List<KpiDraft> kpis = List.of(
-                kpi("total", total, "total"),
-                kpi("active", actifs, "positive"),
-                kpi("inactive", inactifs, "negative"),
-                wantedRole == null ? kpi("filter", matching, "filter") : new KpiDraft("role", wantedRole, matching, "filter")
-        );
+        // KPIs ciblés : pas de doublon Filtre = Inactifs quand on filtre déjà sur le statut.
+        List<KpiDraft> kpis = new ArrayList<>();
+        if (wantedStatut == null && wantedRole == null) {
+            kpis.add(kpi("total", total, "total"));
+            kpis.add(kpi("active", actifs, "positive"));
+            kpis.add(kpi("inactive", inactifs, "negative"));
+        } else if ("INACTIF".equals(wantedStatut) && wantedRole == null) {
+            kpis.add(kpi("inactive", matching, "negative"));
+        } else if ("ACTIF".equals(wantedStatut) && wantedRole == null) {
+            kpis.add(kpi("active", matching, "positive"));
+        } else {
+            kpis.add(kpi("total", total, "total"));
+            kpis.add(kpi("active", actifs, "positive"));
+            kpis.add(kpi("inactive", inactifs, "negative"));
+            if (wantedRole != null) {
+                kpis.add(new KpiDraft("role", wantedRole, matching, "filter"));
+            } else if (matching != total) {
+                kpis.add(kpi("filter", matching, "filter"));
+            }
+        }
         return new ToolOutcome(payload, new FactDraft("staff", null, "kpis", List.of(), kpis));
     }
 
@@ -285,15 +312,17 @@ public class AssistantToolsService {
     public ToolOutcome getTicketStats(String projet) {
         requireAny("VIEW_TICKETS", "MANAGE_TICKETS");
         String code = blank(projet) ? null : projet.trim().toUpperCase(Locale.ROOT);
-        List<Ticket> tickets = ticketRepository.findAll().stream()
-                .filter(t -> !t.isArchive())
-                .filter(t -> code == null || (t.getProject() != null && code.equalsIgnoreCase(t.getProject().getCode())))
-                .toList();
-        Map<String, Long> byStatut = tickets.stream()
-                .collect(Collectors.groupingBy(t -> t.getStatut() == null ? "?" : t.getStatut(), TreeMap::new, Collectors.counting()));
-        long unresolved = tickets.stream().filter(t -> OPEN_TICKETS.contains(nz(t.getStatut()))).count();
-        long resolved = tickets.stream().filter(t -> "RESOLU".equalsIgnoreCase(nz(t.getStatut())) || "CLOTURE".equalsIgnoreCase(nz(t.getStatut()))).count();
-        double rate = tickets.isEmpty() ? 0 : Math.round(1000.0 * resolved / tickets.size()) / 10.0;
+        Map<String, Long> byStatut = toCountMap(ticketRepository.countGroupedByStatut(code));
+        long total = byStatut.values().stream().mapToLong(Long::longValue).sum();
+        long unresolved = byStatut.entrySet().stream()
+                .filter(e -> OPEN_TICKETS.contains(nz(e.getKey())))
+                .mapToLong(Map.Entry::getValue)
+                .sum();
+        long resolved = byStatut.entrySet().stream()
+                .filter(e -> "RESOLU".equalsIgnoreCase(nz(e.getKey())) || "CLOTURE".equalsIgnoreCase(nz(e.getKey())))
+                .mapToLong(Map.Entry::getValue)
+                .sum();
+        double rate = total == 0 ? 0 : Math.round(1000.0 * resolved / total) / 10.0;
         List<Map<String, Object>> rows = byStatut.entrySet().stream()
                 .map(e -> {
                     Map<String, Object> row = new LinkedHashMap<>();
@@ -304,7 +333,7 @@ public class AssistantToolsService {
                 .toList();
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("projet", code);
-        payload.put("total", tickets.size());
+        payload.put("total", total);
         payload.put("nonResolus", unresolved);
         payload.put("tauxResolutionPct", rate);
         payload.put("parStatut", byStatut);
@@ -313,7 +342,7 @@ public class AssistantToolsService {
                 code,
                 "table",
                 rows,
-                List.of(kpi("total", tickets.size(), "total"), kpi("unresolved", unresolved, "negative"), kpi("resolutionPct", rate, "positive"))
+                List.of(kpi("total", total, "total"), kpi("unresolved", unresolved, "negative"), kpi("resolutionPct", rate, "positive"))
         ));
     }
 
@@ -321,14 +350,17 @@ public class AssistantToolsService {
     public ToolOutcome getCnnStatus() {
         requireAny("VIEW_FLEET_MAP", "MANAGE_COURSES", "VIEW_TICKETS");
         Map<String, Object> dash = opsService.cnnDashboard("CNN");
-        long ticketsCnn = ticketRepository.findAll().stream()
-                .filter(t -> !t.isArchive())
-                .filter(t -> t.getProject() != null && "CNN".equalsIgnoreCase(t.getProject().getCode()))
-                .count();
+        long ticketsCnn = ticketRepository.countActiveByProjectCode("CNN");
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("live", dash.get("live"));
         payload.put("source", dash.get("source"));
-        payload.put("integration", "Le Core n'accède pas à la base CNN. JWT/JWKS prévus — démo via ops_records (INTEGRATION-COLIS-NA-NGA.md).");
+        String source = String.valueOf(dash.get("source"));
+        String integration = switch (source) {
+            case "CNN_DB" -> "Agrégats en lecture seule sur la base Colis na Nga. Aucune écriture, aucun détail personnel.";
+            case "INDISPONIBLE" -> "Source Colis na Nga indisponible. Les chiffres de démonstration du Core ne sont pas renvoyés.";
+            default -> "Le Core n'accède pas à la base CNN. JWT/JWKS prévus — démo via ops_records (INTEGRATION-COLIS-NA-NGA.md).";
+        };
+        payload.put("integration", integration);
         payload.put("coursesDuJour", dash.get("coursesDuJour"));
         payload.put("coursiersActifs", dash.get("coursiersActifs"));
         payload.put("tauxLivraison", dash.get("tauxLivraison"));
@@ -341,6 +373,50 @@ public class AssistantToolsService {
                 kpi("cnnTickets", ticketsCnn, "neutral")
         );
         return new ToolOutcome(payload, new FactDraft("cnn", null, "kpis", List.of(), kpis));
+    }
+
+    /**
+     * Résumé système en DTO (chiffres + chaînes uniquement) — pas d'entités JPA.
+     * Compteurs SQL uniquement : aucun accès à Project LAZY.
+     */
+    @Transactional(readOnly = true)
+    public ToolOutcome getSystemSummary() {
+        requireAny("MANAGE_USERS", "MANAGE_ACCESS", "VIEW_TICKETS", "MANAGE_TICKETS", "VIEW_AUDIT");
+        long total = agentRepository.count();
+        long actifs = agentRepository.countByStatutIgnoreCase("ACTIF");
+        long inactifs = Math.max(0, total - actifs);
+        Map<String, Long> openByPriority = toCountMap(ticketRepository.countOpenGroupedByPriorite(OPEN_TICKETS));
+        long openTickets = ticketRepository.countOpen(OPEN_TICKETS);
+        long unreadNotifs = notificationRepository.countByLuFalse();
+        long departments = departementRepository.count();
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("utilisateursTotal", total);
+        payload.put("utilisateursActifs", actifs);
+        payload.put("utilisateursInactifs", inactifs);
+        payload.put("ticketsOuverts", openTickets);
+        payload.put("ticketsOuvertsParPriorite", openByPriority);
+        payload.put("notificationsNonLues", unreadNotifs);
+        payload.put("departements", departments);
+
+        List<Map<String, Object>> rows = openByPriority.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .map(e -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("priorite", e.getKey() == null || e.getKey().isBlank() ? "—" : e.getKey());
+                    row.put("nombre", e.getValue());
+                    return row;
+                })
+                .toList();
+        List<KpiDraft> kpis = List.of(
+                kpi("total", total, "total"),
+                kpi("active", actifs, "positive"),
+                kpi("inactive", inactifs, "negative"),
+                kpi("unresolved", openTickets, "negative"),
+                new KpiDraft(null, "Notifs", unreadNotifs, "filter"),
+                new KpiDraft(null, "Dépts", departments, "neutral")
+        );
+        return new ToolOutcome(payload, new FactDraft("systemSummary", null, "kpis", rows, kpis));
     }
 
     private void requireAny(String... permissions) {
@@ -371,6 +447,16 @@ public class AssistantToolsService {
         row.put("action", log.getAction());
         row.put("objet", log.getObjetType());
         return row;
+    }
+
+    private static Map<String, Long> toCountMap(List<Object[]> rows) {
+        Map<String, Long> map = new TreeMap<>();
+        for (Object[] row : rows) {
+            String key = row[0] == null ? "?" : String.valueOf(row[0]);
+            long value = row[1] instanceof Number n ? n.longValue() : 0L;
+            map.put(key, value);
+        }
+        return map;
     }
 
     private static KpiDraft kpi(String key, Object value, String tone) {

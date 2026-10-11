@@ -1,6 +1,7 @@
 package com.mindsetalliance.core.ops;
 
 import com.mindsetalliance.core.common.security.RequirePermissions;
+import com.mindsetalliance.core.common.security.RequireRoles;
 import jakarta.validation.Valid;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -74,6 +75,12 @@ public class OpsController {
     @GetMapping("/dashboards/finance")
     public Map<String, Object> finance(@RequestParam(required = false) String projectCode) {
         return service.financeDashboard(projectCode);
+    }
+
+    @RequireRoles({"DIRECTION", "CONSEIL_ADMINISTRATION", "ADMIN_SYSTEME"})
+    @GetMapping("/dashboards/direction")
+    public Map<String, Object> direction(@RequestParam(required = false) String projectCode) {
+        return service.directionDashboard(projectCode);
     }
 
     @RequirePermissions({"MANAGE_HR", "MANAGE_STAFF", "MANAGE_INTERNAL_AGENTS", "VIEW_PAYROLL"})

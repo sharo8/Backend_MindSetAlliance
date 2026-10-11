@@ -438,15 +438,24 @@ public class AgentDirectoryService {
             return;
         }
         assertNotSelf(agent.getId());
-        agentRoleRepository.deleteByAgentId(agent.getId());
+        java.util.LinkedHashMap<String, RoleAssign> unique = new java.util.LinkedHashMap<>();
         for (RoleAssign assign : roles) {
             if (assign == null || assign.role() == null || assign.role().isBlank()) {
                 continue;
             }
-            Role role = roleRepository.findByNom(assign.role().trim().toUpperCase())
+            String role = assign.role().trim().toUpperCase();
+            String project = assign.projectCode() == null || assign.projectCode().isBlank()
+                    ? ""
+                    : assign.projectCode().trim().toUpperCase();
+            unique.put(role + "\0" + project, new RoleAssign(role, project.isEmpty() ? null : project));
+        }
+        agentRoleRepository.deleteByAgentId(agent.getId());
+        agentRoleRepository.flush();
+        for (RoleAssign assign : unique.values()) {
+            Role role = roleRepository.findByNom(assign.role())
                     .orElseThrow(() -> new BusinessException("Rôle introuvable : " + assign.role()));
             Project project = null;
-            if (assign.projectCode() != null && !assign.projectCode().isBlank()) {
+            if (assign.projectCode() != null) {
                 project = projectRepository.findByCode(assign.projectCode())
                         .orElseThrow(() -> new BusinessException("Projet introuvable"));
             }

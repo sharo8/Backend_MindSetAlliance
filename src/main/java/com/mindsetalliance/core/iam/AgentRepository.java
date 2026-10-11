@@ -12,6 +12,8 @@ public interface AgentRepository extends JpaRepository<Agent, Long>, JpaSpecific
 
     long countByDepartement_Id(Long departementId);
 
+    long countByStatutIgnoreCase(String statut);
+
     @Query("select distinct a from Agent a left join fetch a.departement")
     List<Agent> findAllWithDepartement();
 }

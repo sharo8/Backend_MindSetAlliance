@@ -51,7 +51,8 @@ public final class LocalEnvFile {
                     continue;
                 }
                 String value = unquote(line.substring(eq + 1).strip());
-                if (System.getenv(name) != null) {
+                String fromEnv = System.getenv(name);
+                if (fromEnv != null && !fromEnv.isBlank()) {
                     continue;
                 }
                 String existing = System.getProperty(name);

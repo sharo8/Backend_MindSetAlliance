@@ -1,4 +1,6 @@
 ma:
+  cnn:
+    cache-seconds: ${MA_CNN_CACHE_SECONDS:30}
   flyway:
     repair-on-migrate: false
   api-docs:

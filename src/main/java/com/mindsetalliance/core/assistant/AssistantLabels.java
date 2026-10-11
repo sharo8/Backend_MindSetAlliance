@@ -26,7 +26,8 @@ final class AssistantLabels {
             Map.entry("todayAudit", new String[]{"Audit du jour", "Today's audit", "Audit ya lelo", "Ukaguzi wa leo"}),
             Map.entry("tickets", new String[]{"Tickets", "Tickets", "Batiké", "Tiketi"}),
             Map.entry("ticketsProject", new String[]{"Tickets · {0}", "Tickets · {0}", "Batiké · {0}", "Tiketi · {0}"}),
-            Map.entry("cnn", new String[]{"Colis na Nga", "Colis na Nga", "Colis na Nga", "Colis na Nga"})
+            Map.entry("cnn", new String[]{"Colis na Nga", "Colis na Nga", "Colis na Nga", "Colis na Nga"}),
+            Map.entry("systemSummary", new String[]{"Résumé système", "System overview", "Résumé ya système", "Muhtasari wa mfumo"})
     );
 
     private static final Map<String, String[]> KPIS = Map.ofEntries(
@@ -59,7 +60,8 @@ final class AssistantLabels {
             Map.entry("type", new String[]{"Type", "Type", "Lolenge", "Aina"}),
             Map.entry("permission", new String[]{"Permission", "Permission", "Ndingisa", "Ruhusa"}),
             Map.entry("statut", new String[]{"Statut", "Status", "Ezalela", "Hali"}),
-            Map.entry("nombre", new String[]{"Nombre", "Count", "Motango", "Idadi"})
+            Map.entry("nombre", new String[]{"Nombre", "Count", "Motango", "Idadi"}),
+            Map.entry("priorite", new String[]{"Priorité", "Priority", "Priorité", "Kipaumbele"})
     );
 
     private static final Map<String, String[]> SCOPE_VALUES = Map.of(

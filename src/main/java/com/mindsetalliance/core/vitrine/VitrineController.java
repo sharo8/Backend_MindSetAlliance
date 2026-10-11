@@ -1,5 +1,6 @@
 package com.mindsetalliance.core.vitrine;
 
+import com.mindsetalliance.core.cnn.CnnDatabaseReader;
 import com.mindsetalliance.core.common.security.JwtRoles;
 import com.mindsetalliance.core.iam.Project;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -14,22 +15,25 @@ import java.util.Set;
 public class VitrineController {
 
     private final VitrineKpiRepository kpiRepository;
+    private final CnnDatabaseReader cnnReader;
 
-    public VitrineController(VitrineKpiRepository kpiRepository) {
+    public VitrineController(VitrineKpiRepository kpiRepository, CnnDatabaseReader cnnReader) {
         this.kpiRepository = kpiRepository;
+        this.cnnReader = cnnReader;
     }
 
     @GetMapping
-    public List<VitrineKpi> vitrine() {
+    public List<?> vitrine() {
         Set<String> codes = JwtRoles.visibleProjectCodes(JwtRoles.currentJwt());
-        if (codes.contains("*")) {
-            return kpiRepository.findAll();
+        List<VitrineKpi> rows = kpiRepository.findAll();
+        if (!codes.contains("*")) {
+            rows = rows.stream()
+                    .filter(kpi -> {
+                        Project project = kpi.getProject();
+                        return project != null && codes.contains(project.getCode());
+                    })
+                    .toList();
         }
-        return kpiRepository.findAll().stream()
-                .filter(kpi -> {
-                    Project project = kpi.getProject();
-                    return project != null && codes.contains(project.getCode());
-                })
-                .toList();
+        return cnnReader.overlayVitrine(rows);
     }
 }

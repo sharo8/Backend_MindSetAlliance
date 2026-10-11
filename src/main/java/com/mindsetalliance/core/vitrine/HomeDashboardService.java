@@ -1,5 +1,6 @@
 package com.mindsetalliance.core.vitrine;
 
+import com.mindsetalliance.core.cnn.CnnDatabaseReader;
 import com.mindsetalliance.core.common.security.JwtRoles;
 import com.mindsetalliance.core.hr.Presence;
 import com.mindsetalliance.core.hr.PresenceRepository;
@@ -66,18 +67,27 @@ public class HomeDashboardService {
     private final TicketRepository ticketRepository;
     private final OpsRecordRepository opsRecordRepository;
     private final PresenceRepository presenceRepository;
+    private final CnnDatabaseReader cnnReader;
 
     public HomeDashboardService(TicketRepository ticketRepository,
                                 OpsRecordRepository opsRecordRepository,
-                                PresenceRepository presenceRepository) {
+                                PresenceRepository presenceRepository,
+                                CnnDatabaseReader cnnReader) {
         this.ticketRepository = ticketRepository;
         this.opsRecordRepository = opsRecordRepository;
         this.presenceRepository = presenceRepository;
+        this.cnnReader = cnnReader;
     }
 
     @Transactional(readOnly = true)
     public Map<String, Object> accueil(String periode, String vueDemandee, String projectCode) {
         Jwt jwt = JwtRoles.currentJwt();
+        if (projectCode != null && !projectCode.isBlank() && !"ENTREPRISE".equalsIgnoreCase(projectCode)) {
+            JwtRoles.assertCanSeeProject(projectCode);
+        }
+        if (cnnReader.applies(projectCode)) {
+            return cnnReader.accueil(projectCode);
+        }
         String vue = resolveVue(jwt, vueDemandee);
         int days = "30j".equalsIgnoreCase(periode) ? 30 : 7;
         LocalDate today = LocalDate.now(ZONE);

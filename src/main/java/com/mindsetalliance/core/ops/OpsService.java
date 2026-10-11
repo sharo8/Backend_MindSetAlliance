@@ -1,6 +1,7 @@
 package com.mindsetalliance.core.ops;
 
 import com.mindsetalliance.core.audit.AuditService;
+import com.mindsetalliance.core.cnn.CnnDatabaseReader;
 import com.mindsetalliance.core.common.BusinessException;
 import com.mindsetalliance.core.common.security.JwtRoles;
 import com.mindsetalliance.core.iam.AgentRepository;
@@ -34,14 +35,17 @@ public class OpsService {
     private final AuditService auditService;
 
     private final RoleRepository roleRepository;
+    private final CnnDatabaseReader cnnReader;
 
     public OpsService(OpsRecordRepository repository, ProjectRepository projectRepository,
-                      AgentRepository agentRepository, AuditService auditService, RoleRepository roleRepository) {
+                      AgentRepository agentRepository, AuditService auditService, RoleRepository roleRepository,
+                      CnnDatabaseReader cnnReader) {
         this.repository = repository;
         this.projectRepository = projectRepository;
         this.agentRepository = agentRepository;
         this.auditService = auditService;
         this.roleRepository = roleRepository;
+        this.cnnReader = cnnReader;
     }
 
     public void assertModule(String module, boolean write) {
@@ -60,6 +64,9 @@ public class OpsService {
     public List<Map<String, Object>> list(String module, String projectCode) {
         assertModule(module, false);
         JwtRoles.assertCanSeeProject(projectCode);
+        if (cnnReader.applies(projectCode) && cnnReader.readModule(module)) {
+            return cnnReader.list(module);
+        }
         return repository.findByModuleOrderByCreatedAtDesc(module.toUpperCase()).stream()
                 .filter(record -> matchesProject(record, projectCode))
                 .filter(this::visibleToCaller)
@@ -71,6 +78,7 @@ public class OpsService {
     public Map<String, Object> create(String module, Upsert body) {
         assertModule(module, true);
         JwtRoles.assertCanSeeProject(body.projectCode());
+        rejectCnnWrite(module, body.projectCode());
         if (body.titre() == null || body.titre().isBlank()) {
             throw new BusinessException("Le titre est obligatoire");
         }
@@ -87,6 +95,10 @@ public class OpsService {
     public Map<String, Object> update(String module, Long id, Upsert body) {
         assertModule(module, true);
         OpsRecord record = get(module, id);
+        rejectCnnWrite(module, body.projectCode());
+        if (record.getProject() != null) {
+            rejectCnnWrite(module, record.getProject().getCode());
+        }
         Map<String, Object> avant = Map.of("titre", record.getTitre(), "statut", record.getStatut());
         apply(record, body, false);
         record.setUpdatedAt(Instant.now());
@@ -102,6 +114,9 @@ public class OpsService {
             throw new BusinessException("Le motif d'annulation ou d'archivage est obligatoire");
         }
         OpsRecord record = get(module, id);
+        if (record.getProject() != null) {
+            rejectCnnWrite(module, record.getProject().getCode());
+        }
         String avant = record.getStatut();
         String next = switch (module.toUpperCase()) {
             case "COURIER" -> "REJETE";
@@ -123,6 +138,9 @@ public class OpsService {
             assertModule("COURSE", false);
         }
         JwtRoles.assertCanSeeProject(projectCode);
+        if (cnnReader.applies(projectCode)) {
+            return cnnReader.dashboard(projectCode);
+        }
         List<OpsRecord> courses = scopedRecords("COURSE", projectCode);
         List<OpsRecord> incidents = scopedRecords("INCIDENT", projectCode);
         List<OpsRecord> coursiers = scopedRecords("COURIER", projectCode);
@@ -170,6 +188,9 @@ public class OpsService {
     @Transactional(readOnly = true)
     public Map<String, Object> financeDashboard(String projectCode) {
         JwtRoles.assertCanSeeProject(projectCode);
+        if (cnnReader.applies(projectCode)) {
+            return cnnReader.finance(projectCode);
+        }
         List<OpsRecord> invoices = scopedRecords("INVOICE", projectCode);
         BigDecimal recettes = invoices.stream()
                 .filter(i -> i.getMontant() != null && !"ANNULEE".equals(i.getStatut()) && !"ARCHIVE".equals(i.getStatut()))
@@ -198,6 +219,18 @@ public class OpsService {
     }
 
     @Transactional(readOnly = true)
+    public Map<String, Object> directionDashboard(String projectCode) {
+        JwtRoles.assertCanSeeProject(projectCode);
+        if (cnnReader.applies(projectCode)) {
+            return cnnReader.direction(projectCode);
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("source", "CORE");
+        body.put("scope", projectCode);
+        return body;
+    }
+
+    @Transactional(readOnly = true)
     public Map<String, Object> rhDashboard(String projectCode) {
         JwtRoles.assertCanSeeProject(projectCode);
         long effectif = agentRepository.findAll().stream().filter(a -> "ACTIF".equals(a.getStatut())).count();
@@ -217,6 +250,12 @@ public class OpsService {
                 .map(e -> Map.of("departement", (Object) e.getKey(), "effectif", e.getValue()))
                 .toList());
         return body;
+    }
+
+    private void rejectCnnWrite(String module, String projectCode) {
+        if (cnnReader.applies(projectCode) && cnnReader.readModule(module)) {
+            throw new BusinessException("Lecture seule : Colis na Nga n'est pas modifié depuis le Core.", 409);
+        }
     }
 
     private OpsRecord get(String module, Long id) {

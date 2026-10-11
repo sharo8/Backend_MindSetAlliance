@@ -96,7 +96,11 @@ public class AccessAdminService {
         assignment.setRole(role);
         assignment.setProject(project);
         assignment.setDateDebut(LocalDate.now());
-        agentRoleRepository.save(assignment);
+        try {
+            agentRoleRepository.saveAndFlush(assignment);
+        } catch (org.springframework.dao.DataIntegrityViolationException ex) {
+            throw new BusinessException("Ce rôle est déjà attribué pour ce périmètre", 409);
+        }
         String projectCode = project == null ? "ENTREPRISE" : project.getCode();
         auditService.record(JwtRoles.agentId(), "ASSIGN_ROLE", "AGENT_ROLE", assignment.getId(), null,
                 Map.of(

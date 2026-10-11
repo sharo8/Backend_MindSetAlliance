@@ -131,13 +131,21 @@ class IamService {
             project = projectRepository.findByCode(request.projectCode())
                     .orElseThrow(() -> new BusinessException("Projet introuvable"));
         }
+        Long projectId = project == null ? null : project.getId();
+        if (agentRoleRepository.countAssignment(agent.getId(), role.getId(), projectId) > 0) {
+            throw new BusinessException("Ce rôle est déjà attribué pour ce périmètre", 409);
+        }
         AgentRole assignment = new AgentRole();
         assignment.setAgent(agent);
         assignment.setRole(role);
         assignment.setProject(project);
         assignment.setDateDebut(request.dateDebut() == null ? LocalDate.now() : request.dateDebut());
         assignment.setDateFin(request.dateFin());
-        agentRoleRepository.save(assignment);
+        try {
+            agentRoleRepository.saveAndFlush(assignment);
+        } catch (org.springframework.dao.DataIntegrityViolationException ex) {
+            throw new BusinessException("Ce rôle est déjà attribué pour ce périmètre", 409);
+        }
         auditService.record(agentId, "ASSIGN_ROLE", "AGENT_ROLE", assignment.getId(), null,
                 Map.of("role", role.getNom(), "project", project == null ? "ENTREPRISE" : project.getCode()));
         return new IamController.AgentRoleDto(assignment.getId(), role.getNom(),

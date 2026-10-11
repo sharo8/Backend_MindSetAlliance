@@ -11,6 +11,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AssistantLanguageTest {
 
@@ -89,6 +91,47 @@ class AssistantLanguageTest {
 
         FactCard fr = AssistantLabels.render(perms, AssistantLanguage.FR);
         assertEquals(List.of("code", "libelle", "module"), fr.columns().stream().map(AssistantDtos.FactColumn::key).toList());
+    }
+
+    @Test
+    void detectsCountListDetailAndSummaryIntents() {
+        assertEquals(AssistantIntent.COUNT, AssistantIntent.detect("combien des users inatifs?"));
+        assertEquals(AssistantIntent.COUNT, AssistantIntent.detect("Combien d'utilisateurs inactifs ?"));
+        assertEquals(AssistantIntent.COUNT, AssistantIntent.detect("How many users are there?"));
+        assertEquals(AssistantIntent.COUNT, AssistantIntent.detect("how many users are active?"));
+        assertEquals(AssistantIntent.COUNT, AssistantIntent.detect("combien d'utilisateurs au total ?"));
+        assertEquals(AssistantIntent.LIST, AssistantIntent.detect("liste des inactifs"));
+        assertEquals(AssistantIntent.LIST, AssistantIntent.detect("Montre-moi les utilisateurs inactifs"));
+        assertEquals(AssistantIntent.DETAIL, AssistantIntent.detect("détaille les utilisateurs"));
+        assertEquals(AssistantIntent.DETAIL, AssistantIntent.detect("Compare actifs et inactifs"));
+        assertEquals(AssistantIntent.SUMMARY, AssistantIntent.detect("give me the summary of the system"));
+        assertEquals(AssistantIntent.SUMMARY, AssistantIntent.detect("donne-moi un résumé"));
+        assertEquals(AssistantIntent.SUMMARY, AssistantIntent.detect("vue d'ensemble du système"));
+        assertFalse(AssistantIntent.COUNT.includeFact("kpis"));
+        assertTrue(AssistantIntent.LIST.includeFact("kpis"));
+        assertTrue(AssistantIntent.DETAIL.includeFact("table"));
+        assertTrue(AssistantIntent.SUMMARY.includeFact("kpis"));
+        assertTrue(AssistantIntent.OTHER.includeFact("table"));
+        assertFalse(AssistantIntent.OTHER.includeFact("kpis"));
+    }
+
+    @Test
+    void formatsSystemSummaryInQuestionLanguage() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("utilisateursTotal", 25L);
+        data.put("utilisateursActifs", 22L);
+        data.put("utilisateursInactifs", 3L);
+        data.put("ticketsOuverts", 4L);
+        data.put("ticketsOuvertsParPriorite", Map.of("CRITIQUE", 1L, "NORMALE", 3L));
+        data.put("notificationsNonLues", 2L);
+        data.put("departements", 5L);
+
+        String en = AssistantChatService.formatSystemSummary(data, AssistantLanguage.EN);
+        assertTrue(en.contains("System overview"));
+        assertTrue(en.contains("**22** active"));
+        String fr = AssistantChatService.formatSystemSummary(data, AssistantLanguage.FR);
+        assertTrue(fr.contains("Résumé du système"));
+        assertTrue(fr.contains("**3** inactifs"));
     }
 
     @Test
