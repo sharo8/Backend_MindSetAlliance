@@ -114,7 +114,7 @@ Colis na Nga revérifie la signature (clé publique JWKS), l'émetteur, l'audien
 - **Connexions réutilisées** : un seul client HTTP partagé (keep-alive), pas de nouvelle poignée de main TLS à chaque requête.
 - **Cache de 10 s** sur les lectures, par combinaison de rôles : les rafraîchissements répétés de la console ne touchent pas CNN. Une écriture vide le cache.
 - **Aucun appel réseau pour vérifier un jeton** chez CNN : la clé publique est en cache.
-- **Maintien à chaud** : un hébergeur gratuit (Render free) endort CNN après ~15 min, et le réveil prend ~1 min. Le Core le ping toutes les 10 min (`MA_CNN_KEEP_WARM`). Sur un plan payant, on peut le désactiver.
+- **Maintien à chaud** : CNN tourne désormais sur Google Cloud Run avec une instance toujours allumée ; il ne s'endort plus. Mettre `MA_CNN_KEEP_WARM=false`. (Option conservée pour un hébergeur qui mettrait CNN en veille.)
 - **Délais courts** : connexion 3 s, réponse 20 s, puis `502`/`504` explicites au lieu d'une attente sans fin.
 - Réponses JSON compressées vers le navigateur.
 
@@ -156,7 +156,7 @@ Chaque nuit à 03:15 (Kinshasa) et 2 min après chaque démarrage, le Core lit `
 | Variable (Core) | Rôle |
 |---|---|
 | `MA_CNN_ENABLED` | `true` pour activer le relais, le maintien à chaud et le rattrapage |
-| `MA_CNN_BASE_URL` | URL de CNN, ex. `https://colis-na-nga-api.onrender.com` |
+| `MA_CNN_BASE_URL` | URL de CNN, ex. `https://colis-backend-378771858294.europe-west1.run.app` |
 | `MA_CNN_WEBHOOK_SECRET` | secret HMAC partagé, **≥ 32 caractères** (sinon tout événement est refusé) |
 | `MA_INTERNAL_API_KEY` | clé exigée sur `/api/internal/**` et `/api/auth/revocations` |
 | `MA_CNN_CACHE_SECONDS` | durée du cache des lectures (défaut 10, 0 = désactivé) |
