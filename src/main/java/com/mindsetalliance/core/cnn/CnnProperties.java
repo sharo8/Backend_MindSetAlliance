@@ -12,6 +12,9 @@ public class CnnProperties {
     private String mode = "api";
     private int cacheSeconds = 10;
     private Db db = new Db();
+    private Api api = new Api();
+    /** Fuseau dans lequel le backend Colis na Nga enregistre ses dates (Cloud Run : UTC). */
+    private String storageZone = "UTC";
 
     public boolean dbMode() {
         return "db".equalsIgnoreCase(mode);
@@ -31,6 +34,48 @@ public class CnnProperties {
 
     public void setCacheSeconds(int cacheSeconds) {
         this.cacheSeconds = cacheSeconds;
+    }
+
+    public String getStorageZone() {
+        return storageZone;
+    }
+
+    public void setStorageZone(String storageZone) {
+        this.storageZone = storageZone == null || storageZone.isBlank() ? "UTC" : storageZone;
+    }
+
+    public Api getApi() {
+        return api;
+    }
+
+    public void setApi(Api api) {
+        this.api = api == null ? new Api() : api;
+    }
+
+    /** Backend Colis na Nga pour le relais d'administration (écritures via ses propres règles métier). */
+    public static class Api {
+        private String baseUrl = "";
+        private int timeoutSeconds = 20;
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+
+        public int getTimeoutSeconds() {
+            return timeoutSeconds;
+        }
+
+        public void setTimeoutSeconds(int timeoutSeconds) {
+            this.timeoutSeconds = timeoutSeconds;
+        }
+
+        public boolean configured() {
+            return baseUrl != null && !baseUrl.isBlank();
+        }
     }
 
     public Db getDb() {

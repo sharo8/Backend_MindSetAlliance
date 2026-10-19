@@ -59,12 +59,15 @@ public class CnnDataSourceConfig {
         String password = firstNonBlank(db.getPassword(), System.getProperty("MA_CNN_DB_PASSWORD"), System.getenv("MA_CNN_DB_PASSWORD"));
         config.setPassword(password);
         log.info("Source Colis na Nga : mot de passe {}", password.isBlank() ? "absent" : "présent");
-        config.setMaximumPoolSize(3);
-        config.setMinimumIdle(0);
-        config.setConnectionTimeout(5_000);
-        config.setValidationTimeout(1_000);
-        config.setIdleTimeout(30_000);
-        config.setMaxLifetime(120_000);
+        // Connexions gardées ouvertes et entretenues : ouvrir une connexion via le Cloud SQL Auth Proxy
+        // coûte plusieurs secondes, on ne veut payer ce prix qu'une fois.
+        config.setMaximumPoolSize(8);
+        config.setMinimumIdle(3);
+        config.setConnectionTimeout(15_000);
+        config.setValidationTimeout(2_000);
+        config.setIdleTimeout(600_000);
+        config.setMaxLifetime(1_500_000);
+        config.setKeepaliveTime(60_000);
         config.setLeakDetectionThreshold(20_000);
         config.setInitializationFailTimeout(-1);
         config.setConnectionInitSql("SET SESSION TRANSACTION READ ONLY");
@@ -89,7 +92,7 @@ public class CnnDataSourceConfig {
     @Conditional(CnnDbUrlCondition.class)
     public JdbcTemplate cnnJdbcTemplate(@Qualifier("cnnDataSource") DataSource cnnDataSource) {
         JdbcTemplate template = new JdbcTemplate(cnnDataSource);
-        template.setQueryTimeout(5);
+        template.setQueryTimeout(15);
         return template;
     }
 }

@@ -9,7 +9,7 @@ spring:
   datasource:
     url: ${DATABASE_URL:jdbc:mysql://localhost:3308/mindsetalliance_core?createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=Africa/Kinshasa&tinyInt1isBit=false}
     username: ${DATABASE_USERNAME:root}
-    password: ${DATABASE_PASSWORD:sharO123}
+    password: ${DATABASE_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       data-source-properties:
@@ -127,10 +127,16 @@ ma:
   cnn:
     mode: ${MA_CNN_MODE:db}
     cache-seconds: ${MA_CNN_CACHE_SECONDS:10}
+    # Fuseau des dates enregistrées par le backend Colis na Nga (Cloud Run tourne en UTC).
+    storage-zone: ${MA_CNN_STORAGE_ZONE:UTC}
     db:
       url: ${MA_CNN_DB_URL:}
       username: ${MA_CNN_DB_USERNAME:}
       password: ${MA_CNN_DB_PASSWORD:}
+    # Relais d'administration : MA Workspace passe par l'API admin Colis na Nga (jamais d'écriture directe en base).
+    api:
+      base-url: ${MA_CNN_API_BASE_URL:https://colis-backend-378771858294.europe-west1.run.app}
+      timeout-seconds: ${MA_CNN_API_TIMEOUT_SECONDS:20}
   tickets:
     reouverture-jours: 30
     critique-heures: 2

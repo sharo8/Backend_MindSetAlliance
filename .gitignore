@@ -1,4 +1,18 @@
+# Secrets et configuration locale (jamais dans Git)
 .env
 .env.local
 application-secrets.yml
+
+# Clé RSA privée de signature des jetons (générée au démarrage)
+data/
+
+# Build
 target/
+
+# Journaux
+logs/
+*.log
+
+# Éditeurs
+.vscode/
+.DS_Store
