@@ -31,6 +31,7 @@ public final class CnnAdminScope {
             Map.entry("subscription-invoices", "MANAGE_CNN_SUBSCRIPTIONS"),
             Map.entry("mobile-money", "MANAGE_CNN_PAYMENTS"),
             Map.entry("refunds", "MANAGE_CNN_PAYMENTS"),
+            Map.entry("credit-transfers", "MANAGE_CNN_PAYMENTS"),
             Map.entry("emergency-calls", "MANAGE_CNN_ORDERS"),
             Map.entry("emergency-contact", "MANAGE_CNN_ORDERS"),
             Map.entry("pricing", "MANAGE_CNN_SETTINGS"),
