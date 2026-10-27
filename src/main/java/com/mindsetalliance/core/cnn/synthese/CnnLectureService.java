@@ -630,9 +630,52 @@ public class CnnLectureService {
         body.put("coursier", section(() -> coursierDeLaCommande(order)));
         body.put("arrets", section(() -> arrets(id)));
         body.put("chronologie", section(() -> chronologie(id)));
-        body.put("trace", section(() -> trace(id)));
+        Object trace = section(() -> trace(id));
+        body.put("trace", trace);
+        body.put("traceRoute", traceRoute(trace));
         return body;
     }
+
+    /**
+     * Trace GPS collée aux routes par la Roads API de Google, via le backend Colis na Nga
+     * (POST /api/public/geo/snap). Null si la trace est trop courte ou si le service ne répond
+     * pas : l'écran garde alors son propre alignement (Directions) ou la trace brute.
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> traceRoute(Object trace) {
+        if (!(trace instanceof List<?> list) || list.size() < 2) return null;
+        try {
+            List<Map<String, Object>> points = new ArrayList<>();
+            for (Object o : list) {
+                Map<String, Object> m = (Map<String, Object>) o;
+                points.add(Map.of("lat", m.get("lat"), "lng", m.get("lng")));
+            }
+            String body = SNAP_JSON.writeValueAsString(Map.of("points", points));
+            String base = properties.getApi().getBaseUrl().replaceAll("/+$", "");
+            java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(java.net.URI.create(base + "/api/public/geo/snap"))
+                    .timeout(java.time.Duration.ofSeconds(15))
+                    .header("Content-Type", "application/json")
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+            java.net.http.HttpResponse<String> res = SNAP_HTTP.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+            if (res.statusCode() != 200) return null;
+            com.fasterxml.jackson.databind.JsonNode coords = SNAP_JSON.readTree(res.body()).path("coordinates");
+            List<Map<String, Object>> out = new ArrayList<>();
+            for (com.fasterxml.jackson.databind.JsonNode c : coords) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("lat", c.path("latitude").asDouble());
+                m.put("lng", c.path("longitude").asDouble());
+                out.add(m);
+            }
+            return out.size() >= 2 ? out : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper SNAP_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+    private static final java.net.http.HttpClient SNAP_HTTP = java.net.http.HttpClient.newBuilder()
+            .connectTimeout(java.time.Duration.ofSeconds(5)).build();
 
     private Map<String, Object> coursierDeLaCommande(Map<String, Object> order) {
         String agentId = (String) order.get("agentId");
